@@ -1,0 +1,41 @@
+[
+  {
+    "id": 100,
+    "name": "Sample Owner 1",
+    "send_1099": true,
+    "documents": [
+      {
+        "id": 1042,
+        "name": "Owner_1099_2025.pdf",
+        "size": 1024,
+        "content_type": "application/octet-stream",
+        "shared_at": "2026/01/18 18:30:18 -0500",
+        "folder_id": null,
+        "folder_name": null,
+        "download_url": "https://example.invalid/presigned-url-redacted"
+      },
+      {
+        "id": 1003,
+        "name": "W-9.pdf",
+        "size": 1024,
+        "content_type": "application/pdf",
+        "shared_at": "2026/01/16 16:32:56 -0500",
+        "folder_id": null,
+        "folder_name": null,
+        "download_url": "https://example.invalid/presigned-url-redacted"
+      }
+    ],
+    "management_agreement_documents": [],
+    "uploaded_pdf_management_agreements": [],
+    "pdf_template_management_agreements": [
+      {
+        "id": 114,
+        "name": "Management Agreement - 100 Sample St",
+        "sent_at": "2025/04/08 10:35:04 -0400",
+        "download_url": "https://example.invalid/presigned-url-redacted",
+        "display_url": "https://example.invalid/presigned-url-redacted"
+      }
+    ],
+    "insurance_policy_documents": []
+  }
+]

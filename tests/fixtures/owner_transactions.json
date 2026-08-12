@@ -1,0 +1,74 @@
+[
+  {
+    "description": "Sample transaction description",
+    "id": "1057",
+    "postedOn": "2026-08-01",
+    "amount": 1000.0,
+    "type": "cashIn",
+    "partyId": "21",
+    "propertyDisplayName": "Sample St 100",
+    "propertyId": "1",
+    "attachments": [],
+    "partyName": "Sample Tenant One, Sample Tenant Two"
+  },
+  {
+    "description": "Sample transaction description",
+    "id": "1033",
+    "postedOn": "2026-07-09",
+    "amount": 1000.0,
+    "type": "cashOut",
+    "partyId": "200",
+    "propertyDisplayName": "Sample St 100",
+    "propertyId": "1",
+    "attachments": [],
+    "partyName": "Sample Property Management"
+  },
+  {
+    "description": "Sample transaction description",
+    "id": "1011",
+    "postedOn": "2026-07-09",
+    "amount": 1000.0,
+    "type": "cashOut",
+    "partyId": "200",
+    "propertyDisplayName": "Sample St 100",
+    "propertyId": "1",
+    "attachments": [],
+    "partyName": "Sample Property Management"
+  },
+  {
+    "description": "Sample transaction description",
+    "id": "1095",
+    "postedOn": "2026-07-09",
+    "amount": 1000.0,
+    "type": "disbursement",
+    "partyId": "100",
+    "propertyDisplayName": "Sample St 100",
+    "propertyId": "1",
+    "attachments": [],
+    "partyName": "Sample Owner 1"
+  },
+  {
+    "description": "Sample transaction description",
+    "id": "1094",
+    "postedOn": "2026-07-09",
+    "amount": 1000.0,
+    "type": "disbursement",
+    "partyId": "101",
+    "propertyDisplayName": "Sample St 100",
+    "propertyId": "1",
+    "attachments": [],
+    "partyName": "Sample Owner 2"
+  },
+  {
+    "description": "Sample transaction description",
+    "id": "1046",
+    "postedOn": "2026-07-01",
+    "amount": 1000.0,
+    "type": "cashIn",
+    "partyId": "21",
+    "propertyDisplayName": "Sample St 100",
+    "propertyId": "1",
+    "attachments": [],
+    "partyName": "Sample Tenant One, Sample Tenant Two"
+  }
+]

@@ -1,0 +1,51 @@
+[
+  {
+    "id": "1",
+    "type": "properties",
+    "relationships": {
+      "address": {
+        "id": "41",
+        "type": "addresses",
+        "attributes": {
+          "full": "100 Sample St, Sample City, ST 00000"
+        }
+      },
+      "units": [
+        {
+          "id": "11",
+          "type": "units",
+          "relationships": {
+            "current_occupancy": {
+              "id": "21",
+              "type": "occupancies",
+              "relationships": {
+                "lease": {
+                  "id": "31",
+                  "type": "leases",
+                  "attributes": {
+                    "end_on": "2027-05-31"
+                  }
+                }
+              },
+              "attributes": {
+                "move_in": "2025-06-28"
+              }
+            }
+          },
+          "attributes": {
+            "meta": null,
+            "name": "",
+            "occupied": true,
+            "unit_total_rent_and_subsidy": 1000.0
+          }
+        }
+      ]
+    },
+    "attributes": {
+      "meta": null,
+      "hidden": false,
+      "minimum_cash_reserve": 500,
+      "raw_display_name": "Sample St 100"
+    }
+  }
+]

@@ -1,0 +1,52 @@
+[
+  {
+    "id": "00000000-0000-4000-8000-000000000000",
+    "type": "ownerships",
+    "relationships": {
+      "owner": {
+        "id": "100",
+        "type": "owners",
+        "attributes": {
+          "name": "Sample Owner 1",
+          "show_unpaid_bills": true,
+          "include_paid_bills_attachments": false
+        }
+      },
+      "ownership_group": {
+        "id": "00000000-0000-4000-8000-000000000001",
+        "type": "ownership_groups",
+        "relationships": {
+          "property": {
+            "id": "1",
+            "type": "properties",
+            "relationships": {
+              "units": [
+                {
+                  "id": "11",
+                  "type": "units",
+                  "attributes": {
+                    "meta": null,
+                    "name": "",
+                    "occupied": true,
+                    "exclude": false
+                  }
+                }
+              ]
+            },
+            "attributes": {
+              "meta": null,
+              "raw_display_name": "Sample St 100",
+              "hidden": false
+            }
+          }
+        },
+        "attributes": {
+          "end_on": null
+        }
+      }
+    },
+    "attributes": {
+      "percent_owned": 50
+    }
+  }
+]

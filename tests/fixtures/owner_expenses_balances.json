@@ -1,0 +1,20 @@
+[
+  {
+    "type": "cashOut",
+    "totalAmount": 5000.0,
+    "propertyId": "1",
+    "partyId": ""
+  },
+  {
+    "type": "disbursement",
+    "totalAmount": 5000.0,
+    "propertyId": "1",
+    "partyId": "100"
+  },
+  {
+    "type": "disbursement",
+    "totalAmount": 5000.0,
+    "propertyId": "1",
+    "partyId": "101"
+  }
+]

@@ -1,0 +1,23 @@
+# Build artifacts
+/target
+**/*.rs.bk
+
+# Environment / editor
+.env
+.DS_Store
+.idea/
+.vscode/
+
+# Credentials must never be committed
+*.pem
+*.key
+secrets.*
+
+# twapp session-local files
+.twapp-*.json
+
+# Local, machine-specific notes: the portal subdomain, account particulars,
+# anything that identifies whose install this is. Deliberately untracked —
+# the repo carries no default host (see src/config.rs).
+*.local.md
+NOTES.local.md

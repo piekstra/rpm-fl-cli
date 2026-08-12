@@ -1,0 +1,58 @@
+[
+  {
+    "id": "1094",
+    "amount": 1000.0,
+    "balance": 0.0,
+    "occurredOn": "2026-01-01",
+    "propertyId": "1"
+  },
+  {
+    "id": "1058",
+    "amount": 1000.0,
+    "balance": 0.0,
+    "occurredOn": "2026-02-01",
+    "propertyId": "1"
+  },
+  {
+    "id": "1011",
+    "amount": 1000.0,
+    "balance": 0.0,
+    "occurredOn": "2026-03-01",
+    "propertyId": "1"
+  },
+  {
+    "id": "1062",
+    "amount": 1000.0,
+    "balance": 0.0,
+    "occurredOn": "2026-04-01",
+    "propertyId": "1"
+  },
+  {
+    "id": "1019",
+    "amount": 1000.0,
+    "balance": 0.0,
+    "occurredOn": "2026-05-01",
+    "propertyId": "1"
+  },
+  {
+    "id": "1033",
+    "amount": 1000.0,
+    "balance": 0.0,
+    "occurredOn": "2026-06-01",
+    "propertyId": "1"
+  },
+  {
+    "id": "1013",
+    "amount": 1000.0,
+    "balance": 0.0,
+    "occurredOn": "2026-07-01",
+    "propertyId": "1"
+  },
+  {
+    "id": "1058",
+    "amount": 1000.0,
+    "balance": 0.0,
+    "occurredOn": "2026-08-01",
+    "propertyId": "1"
+  }
+]

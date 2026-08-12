@@ -1,0 +1,10 @@
+# gitleaks configuration for rpm-fl-cli.
+#
+# This tool hardcodes no secrets. The portal password, session cookie, and 2FA
+# device token exist only in the OS keychain at runtime; test fixtures are
+# scrubbed of real values (see tests/fixtures/README.md). So we extend the
+# default ruleset with no allowlisted secrets. If gitleaks flags something,
+# it's a real finding: remove it, don't allowlist it.
+
+[extend]
+useDefault = true
