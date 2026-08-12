@@ -28,7 +28,7 @@
 //! keeps the device token so a lapsed session usually renews without a code.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use pk_cli_core::CliError;
 use pk_cli_secrets::{CredentialStore, Secret};
@@ -36,6 +36,7 @@ use reqwest::cookie::CookieStore;
 use serde_json::Value;
 
 use crate::config::{Config, DEVICE_TOKEN_ACCOUNT, SESSION_ACCOUNT};
+use crate::diag;
 
 /// A recent desktop Chrome UA. The portal's edge rejects obviously-bot clients.
 const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
@@ -90,6 +91,10 @@ pub struct Portal {
     /// were seeded with, the cached session would go stale even though the
     /// portal handed us a live one on the previous call.
     sync: Option<SessionSync>,
+    /// Emit one line per request to stderr (`-v`): path, status, elapsed.
+    verbose: bool,
+    /// Suppress stall notes (`-q`).
+    quiet: bool,
 }
 
 struct SessionSync {
@@ -98,15 +103,19 @@ struct SessionSync {
 }
 
 impl Portal {
-    /// A client with an empty cookie jar and no keychain write-back.
-    pub fn new(base: impl Into<String>) -> Result<Self, CliError> {
+    /// A client with an empty cookie jar, no keychain write-back, and an
+    /// explicit per-request budget (`--timeout` / the `timeout_secs` config
+    /// key; [`Config::timeout`] resolves the default).
+    pub fn new(base: impl Into<String>, timeout: Duration) -> Result<Self, CliError> {
         let jar = Arc::new(reqwest::cookie::Jar::default());
         let http = reqwest::blocking::Client::builder()
             .user_agent(UA)
             // Total request budget plus an explicit connect budget, so a
             // stalled TLS handshake fails fast instead of hanging the CLI.
-            .timeout(Duration::from_secs(45))
-            .connect_timeout(Duration::from_secs(15))
+            // The connect budget never exceeds the total, so a small
+            // `--timeout` really does bound the whole request.
+            .timeout(timeout)
+            .connect_timeout(Duration::from_secs(15).min(timeout))
             .cookie_provider(jar.clone())
             .build()
             .map_err(|e| CliError::Other(format!("failed to build HTTP client: {e}")))?;
@@ -115,7 +124,17 @@ impl Portal {
             jar,
             base: base.into(),
             sync: None,
+            verbose: false,
+            quiet: false,
         })
+    }
+
+    /// Wire in the family diagnostics flags. Verbose output goes to stderr
+    /// only, and never includes cookies, query values, or response bodies.
+    pub fn with_diagnostics(mut self, verbose: bool, quiet: bool) -> Self {
+        self.verbose = verbose;
+        self.quiet = quiet;
+        self
     }
 
     /// Replay a cached session (and device token) from the keychain. The
@@ -129,7 +148,7 @@ impl Portal {
         // step the user has to take first. Reading the keychain first reports
         // "no session stored — run auth login", which sends them down a path
         // that cannot succeed yet.
-        let mut portal = Portal::new(cfg.base_url()?)?;
+        let mut portal = Portal::new(cfg.base_url()?, cfg.timeout())?;
         let session = creds.get(SESSION_ACCOUNT)?.ok_or_else(|| {
             CliError::Auth("no portal session stored — run `rpmfl auth login`".into())
         })?;
@@ -154,11 +173,14 @@ impl Portal {
         if *sync.last.borrow() == current {
             return;
         }
-        if sync
-            .creds
-            .set(SESSION_ACCOUNT, &Secret::new(current.clone()))
-            .is_ok()
-        {
+        // Best-effort, but not silently slow: a write to an item whose ACL
+        // doesn't cover this binary blocks on the same permission dialog as
+        // the reads do.
+        let stored = diag::keychain(self.quiet, || {
+            sync.creds
+                .set(SESSION_ACCOUNT, &Secret::new(current.clone()))
+        });
+        if stored.is_ok() {
             *sync.last.borrow_mut() = current;
         }
     }
@@ -446,9 +468,19 @@ impl Portal {
         if !query.is_empty() {
             req = req.query(query);
         }
-        let resp = req
-            .send()
+        // The timeout bounds a stalled request, but say what's being waited
+        // on before it trips — silence until an error reads as a hang.
+        let started = Instant::now();
+        let note = format!("waiting on the portal (GET {path})");
+        let resp = diag::with_stall_note(self.quiet, diag::PORTAL_STALL, &note, || req.send())
             .map_err(|e| CliError::Upstream(format!("request to {path} failed: {e}")))?;
+        if self.verbose {
+            eprintln!(
+                "rpmfl: GET {path} -> HTTP {} in {:.2}s",
+                resp.status().as_u16(),
+                started.elapsed().as_secs_f32()
+            );
+        }
         let out = self.handle(resp, path);
         if out.is_ok() {
             self.sync_session();
@@ -838,7 +870,7 @@ mod tests {
 
     #[test]
     fn urls_join_base_and_path() {
-        let p = Portal::new("https://example.appfolio.com").unwrap();
+        let p = Portal::new("https://example.appfolio.com", Duration::from_secs(45)).unwrap();
         assert_eq!(
             p.url("/oportal/api/x"),
             "https://example.appfolio.com/oportal/api/x"
@@ -854,7 +886,7 @@ mod tests {
     fn sync_is_a_noop_without_a_keychain_binding() {
         // `Portal::new` is the login-time client: it has no cached session to
         // write back to, so syncing must do nothing rather than panic.
-        let p = Portal::new("https://example.appfolio.com").unwrap();
+        let p = Portal::new("https://example.appfolio.com", Duration::from_secs(45)).unwrap();
         assert!(p.sync.is_none());
         p.seed_cookie(SESSION_COOKIE, "fresh");
         p.sync_session();
@@ -863,7 +895,7 @@ mod tests {
 
     #[test]
     fn seeded_cookies_round_trip() {
-        let p = Portal::new("https://example.appfolio.com").unwrap();
+        let p = Portal::new("https://example.appfolio.com", Duration::from_secs(45)).unwrap();
         p.seed_cookie(SESSION_COOKIE, "sess-value");
         p.seed_cookie(DEVICE_COOKIE, "device-value");
         assert_eq!(

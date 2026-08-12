@@ -8,6 +8,7 @@ mod client;
 mod commands;
 mod config;
 mod dates;
+mod diag;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
@@ -35,6 +36,17 @@ const REPO: &str = "piekstra/rpm-fl-cli";
 struct Cli {
     #[command(flatten)]
     common: CommonArgs,
+
+    /// Per-request timeout in seconds (default 45; `config set timeout_secs`
+    /// makes a different budget stick).
+    #[arg(
+        long,
+        global = true,
+        value_name = "SECS",
+        env = "RPMFL_TIMEOUT",
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    timeout: Option<u64>,
 
     #[command(subcommand)]
     command: Command,
@@ -132,7 +144,7 @@ enum ConfigCmd {
     Path,
     /// Show the effective configuration.
     Show,
-    /// Set a config key (base_url, username).
+    /// Set a config key (base_url, username, timeout_secs).
     Set { key: String, value: String },
     /// Remove a config key.
     Unset { key: String },
@@ -148,7 +160,10 @@ fn main() {
 fn run(cli: &Cli) -> Result<(), CliError> {
     let store = ConfigStore::new(BIN);
     let creds = CredentialStore::for_binary(BIN);
-    let cfg: Config = store.load()?;
+    let mut cfg: Config = store.load()?;
+    if let Some(secs) = cli.timeout {
+        cfg.timeout_secs = Some(secs);
+    }
     let ctx = Ctx {
         common: &cli.common,
         cfg: &cfg,
@@ -220,8 +235,16 @@ fn auth(
     match cmd {
         AuthCmd::Login(args) => login(cli, args, creds, cfg),
         AuthCmd::Status(args) => {
-            let has_password = creds.get(KEYCHAIN_ACCOUNT)?.is_some();
-            let has_session = creds.get(SESSION_ACCOUNT)?.is_some();
+            // Even these local reads can block for minutes: macOS parks the
+            // process inside `securityd` while a keychain permission dialog
+            // waits for a click. Name that wait instead of sitting silent.
+            let (has_password, has_session) =
+                diag::keychain(cli.common.quiet, || -> Result<_, CliError> {
+                    Ok((
+                        creds.get(KEYCHAIN_ACCOUNT)?.is_some(),
+                        creds.get(SESSION_ACCOUNT)?.is_some(),
+                    ))
+                })?;
 
             // A stored session is necessary but not sufficient: the portal
             // expires sessions server-side, and nothing local reflects that.
@@ -234,7 +257,8 @@ fn auth(
             let (authenticated, session_valid, note) = if !args.verify || !has_session {
                 (has_session, None, None)
             } else {
-                match Portal::from_cached_session(cfg, creds)
+                match diag::keychain(cli.common.quiet, || Portal::from_cached_session(cfg, creds))
+                    .map(|p| p.with_diagnostics(cli.common.verbose, cli.common.quiet))
                     .and_then(|p| p.get("/oportal/api/owner_ownerships", &[]))
                 {
                     Ok(_) => (
@@ -328,7 +352,7 @@ fn login(
     // A code supplied on the command line belongs to the login that requested
     // it, so resume that parked session rather than starting a fresh one.
     if let (Some(code), Some(pending)) = (&args.code, creds.get(PENDING_SESSION_ACCOUNT)?) {
-        let portal = Portal::new(cfg.base_url()?)?;
+        let portal = Portal::new(cfg.base_url()?, cfg.timeout())?;
         portal.seed_session(pending.expose());
         match portal.verify_code(code.trim()) {
             Ok(()) => {
@@ -363,7 +387,7 @@ fn login(
         }
     };
 
-    let portal = Portal::new(cfg.base_url()?)?;
+    let portal = Portal::new(cfg.base_url()?, cfg.timeout())?;
     if let Some(token) = creds.get(DEVICE_TOKEN_ACCOUNT)? {
         // Replayed on the chance this account skips fingerprint binding.
         portal.seed_device_token(token.expose());
@@ -467,6 +491,17 @@ fn config_cmd(cli: &Cli, cmd: &ConfigCmd, store: &ConfigStore) -> Result<(), Cli
             match key.as_str() {
                 "base_url" => cfg.base_url = Some(value.clone()),
                 "username" => cfg.username = Some(value.clone()),
+                "timeout_secs" => {
+                    let secs: u64 = value.parse().map_err(|_| {
+                        CliError::Usage(format!(
+                            "timeout_secs must be a positive integer, got {value:?}"
+                        ))
+                    })?;
+                    if secs == 0 {
+                        return Err(CliError::Usage("timeout_secs must be at least 1".into()));
+                    }
+                    cfg.timeout_secs = Some(secs);
+                }
                 other => return Err(unknown_key(other)),
             }
             store.save(&cfg)
@@ -476,6 +511,7 @@ fn config_cmd(cli: &Cli, cmd: &ConfigCmd, store: &ConfigStore) -> Result<(), Cli
             match key.as_str() {
                 "base_url" => cfg.base_url = None,
                 "username" => cfg.username = None,
+                "timeout_secs" => cfg.timeout_secs = None,
                 other => return Err(unknown_key(other)),
             }
             store.save(&cfg)

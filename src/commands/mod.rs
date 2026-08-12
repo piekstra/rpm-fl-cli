@@ -30,7 +30,13 @@ impl Ctx<'_> {
     /// A portal session replayed from the keychain. Expiry surfaces as a
     /// `CliError::Auth` (exit 3) on the first read, pointing at `auth login`.
     pub fn client(&self) -> Result<Portal, CliError> {
-        Portal::from_cached_session(self.cfg, self.creds)
+        // The keychain reads in here block indefinitely while macOS waits on
+        // a permission dialog — the real cause of the multi-minute "hangs" —
+        // so name that wait instead of sitting silent.
+        let portal = crate::diag::keychain(self.common.quiet, || {
+            Portal::from_cached_session(self.cfg, self.creds)
+        })?;
+        Ok(portal.with_diagnostics(self.common.verbose, self.common.quiet))
     }
 }
 

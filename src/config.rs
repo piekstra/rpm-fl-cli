@@ -9,6 +9,12 @@ use serde::{Deserialize, Serialize};
 /// Environment fallback for the portal host.
 pub const ENV_BASE_URL: &str = "RPMFL_BASE_URL";
 
+/// Per-request HTTP budget when neither `--timeout` nor `timeout_secs` says
+/// otherwise. Generous next to the portal's usual sub-second answers, but
+/// small enough that one stalled request still fits inside the conventional
+/// 60s budget of a wrapping tool.
+pub const DEFAULT_TIMEOUT_SECS: u64 = 45;
+
 /// Keychain account the portal password is stored under.
 pub const KEYCHAIN_ACCOUNT: &str = "password";
 
@@ -42,6 +48,11 @@ pub struct Config {
     /// Portal login email (identity label only; secrets stay in the keychain).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub username: Option<String>,
+
+    /// Per-request HTTP timeout in seconds (default [`DEFAULT_TIMEOUT_SECS`];
+    /// the `--timeout` flag overrides for one invocation).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timeout_secs: Option<u64>,
 }
 
 impl Config {
@@ -59,6 +70,16 @@ impl Config {
             })
     }
 
+    /// The effective per-request HTTP budget.
+    ///
+    /// Clamped to at least one second *here*, not only at the `config set` /
+    /// `--timeout` boundaries: a hand-edited config file can carry
+    /// `timeout_secs: 0`, and trusting it would zero the connect budget and
+    /// silently fail every request.
+    pub fn timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.timeout_secs.unwrap_or(DEFAULT_TIMEOUT_SECS).max(1))
+    }
+
     /// Resolve the login email: config, then `$RPMFL_USERNAME`.
     pub fn username(&self) -> Option<String> {
         self.username.clone().or_else(|| {
@@ -70,4 +91,28 @@ impl Config {
 }
 
 /// Config keys settable via `rpmfl config set <key> <value>`.
-pub const KNOWN_KEYS: &[&str] = &["base_url", "username"];
+pub const KNOWN_KEYS: &[&str] = &["base_url", "username", "timeout_secs"];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timeout_defaults_and_overrides() {
+        assert_eq!(
+            Config::default().timeout(),
+            std::time::Duration::from_secs(DEFAULT_TIMEOUT_SECS)
+        );
+        let cfg = Config {
+            timeout_secs: Some(10),
+            ..Config::default()
+        };
+        assert_eq!(cfg.timeout(), std::time::Duration::from_secs(10));
+        // A hand-edited `timeout_secs: 0` must not zero the request budget.
+        let cfg = Config {
+            timeout_secs: Some(0),
+            ..Config::default()
+        };
+        assert_eq!(cfg.timeout(), std::time::Duration::from_secs(1));
+    }
+}
