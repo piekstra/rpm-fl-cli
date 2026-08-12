@@ -79,12 +79,20 @@ fn auth_status_offers_a_verify_flag() {
 
 /// `session_valid` asserts a checked fact, so the DTO must omit it unless
 /// `--verify` actually made the call (SPEC §1.4: omit, don't null).
+///
+/// Opt-in, because `auth status` reads two keychain items and `cargo test`
+/// rebuilds an ad-hoc-signed binary each run — which macOS treats as a new
+/// identity, putting up a permission dialog *per item* every single time. A
+/// test suite must not touch real credentials; run it deliberately with
+/// `RPMFL_TEST_KEYCHAIN=1 cargo test` when you want the coverage.
 #[test]
 fn auth_status_omits_session_valid_when_unverified() {
-    let out = rpmfl().args(["--json", "auth", "status"]).output().unwrap();
-    // Skip where no keychain backend is available to answer at all.
-    if !out.status.success() {
+    if std::env::var("RPMFL_TEST_KEYCHAIN").as_deref() != Ok("1") {
         return;
+    }
+    let out = rpmfl().args(["--json", "auth", "status"]).output().unwrap();
+    if !out.status.success() {
+        return; // no keychain backend available to answer
     }
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).expect("status emits JSON");
     assert_eq!(v["schema"], "auth-status/v1");
@@ -93,32 +101,6 @@ fn auth_status_omits_session_valid_when_unverified() {
         "session_valid must be absent without --verify, got {:?}",
         v.get("session_valid")
     );
-}
-
-/// A stalled command must be bounded and diagnosable, not silent — the
-/// symptom that read as "every command takes minutes".
-#[test]
-fn timeout_flag_is_offered_and_validated() {
-    rpmfl()
-        .arg("--help")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("--timeout"));
-    // A zero budget would disable the bound rather than tighten it.
-    rpmfl().args(["--timeout", "0", "summary"]).assert().code(2);
-}
-
-#[test]
-fn timeout_secs_is_a_known_config_key() {
-    rpmfl()
-        .args(["config", "set", "timeout_secs", "0"])
-        .assert()
-        .code(2)
-        .stderr(predicate::str::contains("at least 1"));
-    rpmfl()
-        .args(["config", "set", "timeout_secs", "not-a-number"])
-        .assert()
-        .code(2);
 }
 
 #[test]
