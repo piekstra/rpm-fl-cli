@@ -95,6 +95,32 @@ fn auth_status_omits_session_valid_when_unverified() {
     );
 }
 
+/// A stalled command must be bounded and diagnosable, not silent — the
+/// symptom that read as "every command takes minutes".
+#[test]
+fn timeout_flag_is_offered_and_validated() {
+    rpmfl()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--timeout"));
+    // A zero budget would disable the bound rather than tighten it.
+    rpmfl().args(["--timeout", "0", "summary"]).assert().code(2);
+}
+
+#[test]
+fn timeout_secs_is_a_known_config_key() {
+    rpmfl()
+        .args(["config", "set", "timeout_secs", "0"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("at least 1"));
+    rpmfl()
+        .args(["config", "set", "timeout_secs", "not-a-number"])
+        .assert()
+        .code(2);
+}
+
 #[test]
 fn version_prints_the_crate_version() {
     rpmfl()

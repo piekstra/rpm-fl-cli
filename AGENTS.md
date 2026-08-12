@@ -58,6 +58,16 @@ Run `make verify` before considering a change done — it's exactly what CI runs
 - **Dates** are ISO `YYYY-MM-DD` at the CLI boundary, converted in `dates.rs`.
   Never surface the portal's `MM/DD/YYYY` in a flag.
 
+## Diagnosing a "hang"
+
+Suspect the keychain before the portal. Reads answer in well under a second;
+the multi-minute waits were macOS parking the process inside `securityd` while
+a permission dialog waited for a click, because an ad-hoc-signed rebuild had
+revoked the "Always Allow" grant. `src/diag.rs` puts a line on stderr when a
+keychain or portal wait turns long — every `CredentialStore` touch should go
+through `diag::keychain`, so no wait is ever silent. It never shortens a wait;
+`--timeout` bounds it.
+
 ## Portal-specific gotchas
 
 - An expired session returns a **302 to the login page, not a 401**. The client

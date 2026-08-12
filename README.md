@@ -94,7 +94,28 @@ rpmfl config path|show|set|unset                        # non-secret settings
 rpmfl completions <shell> | rpmfl info | rpmfl self-update
 ```
 
-Global flags: `--json`, `-v/--verbose`, `-q/--quiet`, `--no-color`.
+Global flags: `--json`, `-v/--verbose`, `-q/--quiet`, `--no-color`,
+`--timeout <SECS>`.
+
+### When a command seems to hang
+
+It is usually the OS keychain, not the portal. macOS scopes an "Always Allow"
+grant to the binary's code signature, so an unsigned rebuild silently revokes
+it and the next run parks inside `securityd` waiting for a permission dialog —
+with nothing printed. `rpmfl` now names that wait on stderr after a few
+seconds, and `-v` times every request:
+
+```console
+$ rpmfl -v properties list
+rpmfl: waiting on the OS keychain — if macOS is showing a permission dialog, choose "Always Allow" so future runs skip it (4s elapsed)
+rpmfl: GET /oportal/api/owner_properties -> HTTP 200 in 0.31s
+```
+
+Choose "Always Allow" once and it stops. Build with `make release` / `make
+install` rather than bare `cargo`, so the binary keeps the stable signing
+identity. `--timeout <SECS>` (default 45) bounds a stalled request;
+`rpmfl config set timeout_secs 20` makes a smaller budget stick, which matters
+for tool wrappers with a 60s limit.
 
 ## Examples
 
