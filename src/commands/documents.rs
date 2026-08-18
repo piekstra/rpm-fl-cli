@@ -82,17 +82,9 @@ pub fn run(ctx: &Ctx, cmd: &Cmd) -> Result<(), CliError> {
             let path = match &args.output {
                 // An explicit `-o` target is the operator's own choice.
                 Some(o) => o.clone(),
-                // The default name comes from the portal, where other parties
-                // on the account (property manager, co-owners) control it — so
-                // reduce it to a bare leaf that can't traverse out of the cwd.
-                None => doc
-                    .file
-                    .as_deref()
-                    .map(std::path::Path::new)
-                    .and_then(std::path::Path::file_name)
-                    .map(|s| s.to_string_lossy().into_owned())
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or_else(|| "document.pdf".to_string()),
+                // The default name comes from the portal, where other parties on
+                // the account control it — reduce it to a traversal-safe leaf.
+                None => default_download_name(doc.file.as_deref()),
             };
             let bytes = client.download(url)?;
             std::fs::File::create(&path)
@@ -155,6 +147,18 @@ fn document_list_json(docs: &[Value]) -> Value {
         }
     }
     env
+}
+
+/// The default save name for a downloaded document: the portal-supplied
+/// filename reduced to a bare leaf (`Path::file_name`) so a provider-controlled
+/// `name` — set by other parties on the account — can never traverse out of the
+/// working directory. Falls back to `document.pdf` when there's no usable leaf.
+fn default_download_name(file: Option<&str>) -> String {
+    file.map(std::path::Path::new)
+        .and_then(std::path::Path::file_name)
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "document.pdf".to_string())
 }
 
 /// Map one raw portal document (as flattened by [`collect`]) onto a
@@ -301,6 +305,17 @@ mod tests {
         assert_eq!(item["size"], 100);
         assert_eq!(item["content_type"], "application/pdf");
         assert!(item.get("folder_name").is_none());
+    }
+
+    #[test]
+    fn default_download_name_strips_traversal_and_keeps_the_leaf() {
+        assert_eq!(default_download_name(Some("1099.pdf")), "1099.pdf");
+        // A crafted portal name can't escape the working directory.
+        assert_eq!(default_download_name(Some("../../etc/passwd")), "passwd");
+        assert_eq!(default_download_name(Some("/abs/dir/x.pdf")), "x.pdf");
+        // No usable leaf → safe fallback.
+        assert_eq!(default_download_name(Some("..")), "document.pdf");
+        assert_eq!(default_download_name(None), "document.pdf");
     }
 
     #[test]
