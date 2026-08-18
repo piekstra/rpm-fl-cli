@@ -108,20 +108,41 @@ mod tests {
 
     #[test]
     fn a_stalled_call_gets_a_note_and_heartbeats() {
+        use std::sync::{Arc, Mutex};
+
         let (tx, rx) = mpsc::channel::<()>();
+        let lines = Arc::new(Mutex::new(Vec::<String>::new()));
+
+        // Release the watched "work" only once the watchdog has actually
+        // emitted the note plus one heartbeat — never on a fixed sleep. A
+        // starved CI runner could otherwise finish (and drop `tx`) before
+        // `watch` even began, so `recv_timeout` returns `Disconnected` and the
+        // watchdog stays silent — the intermittent `got []` failure. Gating on
+        // the shared output makes the two lines a precondition of finishing,
+        // not a race. The bounded loop still fails loudly (rather than hanging)
+        // if `watch` never emits.
+        let seen = Arc::clone(&lines);
         let release = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(120));
+            for _ in 0..2000 {
+                if seen.lock().unwrap().len() >= 2 {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
             drop(tx);
         });
-        let mut lines = Vec::new();
+
+        let sink = Arc::clone(&lines);
         watch(
             &rx,
             Duration::from_millis(20),
             Duration::from_millis(30),
             "waiting on the OS keychain",
-            &mut |l| lines.push(l),
+            &mut |l| sink.lock().unwrap().push(l),
         );
         release.join().unwrap();
+
+        let lines = lines.lock().unwrap();
         assert!(
             lines.len() >= 2,
             "expected the note plus at least one heartbeat, got {lines:?}"

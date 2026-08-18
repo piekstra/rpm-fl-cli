@@ -5,13 +5,15 @@
 //! fetches immediately rather than printing a link that will be dead by the
 //! time anyone clicks it. `--url` prints it anyway for piping.
 
+use std::collections::HashMap;
 use std::io::Write;
 
 use clap::{Args, Subcommand};
 use pk_cli_core::{output, CliError};
+use pk_cli_documents::{Document, Paged, SavedDocument};
 use serde_json::{json, Value};
 
-use super::{emit, table_view, Ctx};
+use super::{table_view, Ctx};
 
 #[derive(Args, Debug)]
 pub struct GetArgs {
@@ -43,32 +45,30 @@ pub fn run(ctx: &Ctx, cmd: &Cmd) -> Result<(), CliError> {
 
     match cmd {
         Cmd::List => {
-            emit(
-                ctx,
-                "document-list",
-                json!({ "count": docs.len(), "documents": docs }),
-                |v| {
-                    let rows = v
-                        .get("documents")
-                        .and_then(Value::as_array)
-                        .cloned()
-                        .unwrap_or_default();
-                    output::table(&table_view(
-                        &rows,
-                        &["id", "name", "category", "shared_at", "size"],
-                    ));
-                },
-            );
+            let env = document_list_json(&docs);
+            if ctx.common.json {
+                output::json(&env);
+            } else {
+                let rows = env
+                    .get("items")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                output::table(&table_view(
+                    &rows,
+                    &["id", "name", "category", "date", "size"],
+                ));
+            }
             Ok(())
         }
         Cmd::Get(args) => {
-            let doc = docs
+            let raw = docs
                 .iter()
                 .find(|d| d.get("id").map(scalar_id) == Some(args.document_id.clone()))
                 .ok_or_else(|| {
                     CliError::NotFound(format!("no document with id {}", args.document_id))
                 })?;
-            let url = doc
+            let url = raw
                 .get("download_url")
                 .and_then(Value::as_str)
                 .ok_or_else(|| CliError::Upstream("document has no download URL".into()))?;
@@ -78,11 +78,14 @@ pub fn run(ctx: &Ctx, cmd: &Cmd) -> Result<(), CliError> {
                 return Ok(());
             }
 
-            let name = doc
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("document.pdf");
-            let path = args.output.clone().unwrap_or_else(|| name.to_string());
+            let doc = document_of(raw);
+            let path = match &args.output {
+                // An explicit `-o` target is the operator's own choice.
+                Some(o) => o.clone(),
+                // The default name comes from the portal, where other parties on
+                // the account control it — reduce it to a traversal-safe leaf.
+                None => default_download_name(doc.file.as_deref()),
+            };
             let bytes = client.download(url)?;
             std::fs::File::create(&path)
                 .and_then(|mut f| f.write_all(&bytes))
@@ -91,15 +94,97 @@ pub fn run(ctx: &Ctx, cmd: &Cmd) -> Result<(), CliError> {
                 eprintln!("wrote {} ({} bytes)", path, bytes.len());
             }
             if ctx.common.json {
-                output::json(&json!({
-                    "schema": "document-download/v1",
-                    "path": path,
-                    "bytes": bytes.len(),
-                }));
+                // Full `document-download/v1`: the listed document's id/name/
+                // category/date carried through to what landed on disk.
+                let saved = SavedDocument::from_document(&doc, path, bytes.len() as u64);
+                output::json(
+                    &serde_json::to_value(saved).expect("document-download/v1 serializes"),
+                );
             }
             Ok(())
         }
     }
+}
+
+/// The `document-list/v1` envelope: the documents/v1 [`Document`] items, plus
+/// rpmfl's provider extras (`shared_at`/`size`/`content_type`/`folder_name`)
+/// folded back onto each item beside the profile fields — a documents/v1
+/// consumer reads the known keys and ignores the rest (fpl/wabhoa pattern).
+///
+/// Extras are matched to their item **by id**, not by position, so a future
+/// cli-common that reorders/filters/paginates `Paged` items can only ever
+/// produce *missing* extras, never extras misattributed to another document.
+/// Pure (no `Ctx`/HTTP) so it is unit-tested directly.
+fn document_list_json(docs: &[Value]) -> Value {
+    let items: Vec<Document> = docs.iter().map(document_of).collect();
+    let mut env =
+        serde_json::to_value(Paged::new("document", items)).expect("document-list/v1 serializes");
+
+    let by_id: HashMap<String, &Value> = docs
+        .iter()
+        .filter_map(|d| d.get("id").map(|v| (scalar_id(v), d)))
+        .collect();
+    if let Some(arr) = env.get_mut("items").and_then(Value::as_array_mut) {
+        for item in arr {
+            let Some(obj) = item.as_object_mut() else {
+                continue;
+            };
+            let id = match obj.get("id").and_then(Value::as_str) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            let Some(raw) = by_id.get(id.as_str()) else {
+                continue;
+            };
+            for key in ["shared_at", "size", "content_type", "folder_name"] {
+                match raw.get(key) {
+                    Some(v) if !v.is_null() => {
+                        obj.insert(key.to_string(), v.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    env
+}
+
+/// The default save name for a downloaded document: the portal-supplied
+/// filename reduced to a bare leaf (`Path::file_name`) so a provider-controlled
+/// `name` — set by other parties on the account — can never traverse out of the
+/// working directory. Falls back to `document.pdf` when there's no usable leaf.
+fn default_download_name(file: Option<&str>) -> String {
+    file.map(std::path::Path::new)
+        .and_then(std::path::Path::file_name)
+        .map(|s| s.to_string_lossy().into_owned())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "document.pdf".to_string())
+}
+
+/// Map one raw portal document (as flattened by [`collect`]) onto a
+/// documents/v1 [`Document`]. The portal's `name` is the filename, so it also
+/// serves as `file` (the default save name). No financial fields — a document
+/// is just what an archiver needs to file and fetch it.
+fn document_of(raw: &Value) -> Document {
+    let id = raw.get("id").map(scalar_id).unwrap_or_default();
+    let name = raw
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let mut d = Document::new(id, name.clone());
+    d.category = raw
+        .get("category")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    d.date = raw
+        .get("shared_at")
+        .and_then(Value::as_str)
+        .and_then(crate::dates::date_from_portal_timestamp);
+    if !name.is_empty() {
+        d.file = Some(name);
+    }
+    d
 }
 
 /// The endpoint groups documents by owner and by kind; flatten them into one
@@ -177,5 +262,73 @@ mod tests {
     fn ids_compare_as_strings() {
         assert_eq!(scalar_id(&json!(42)), "42");
         assert_eq!(scalar_id(&json!("42")), "42");
+    }
+
+    #[test]
+    fn document_of_conforms_to_documents_v1() {
+        let raw = collect(&json!([{
+            "id": 1, "name": "Owner",
+            "documents": [{ "id": 10, "name": "1099.pdf", "shared_at": "2026/01/18 18:30:18 -0500", "size": 100 }],
+        }]))[0]
+            .clone();
+        let v = serde_json::to_value(document_of(&raw)).unwrap();
+        assert_eq!(v["id"], "10"); // numeric portal id → string
+        assert_eq!(v["name"], "1099.pdf");
+        assert_eq!(v["category"], "shared");
+        assert_eq!(v["date"], "2026-01-18"); // timestamp → ISO date portion
+        assert_eq!(v["file"], "1099.pdf"); // name doubles as the save filename
+        assert!(
+            v.get("amount").is_none(),
+            "no financial fields on a document"
+        );
+        // Round-trips through the profile type.
+        let _: Document = serde_json::from_value(v).unwrap();
+    }
+
+    #[test]
+    fn document_list_json_is_the_profile_envelope_with_extras() {
+        let docs = collect(&json!([{
+            "id": 1, "name": "Owner",
+            "documents": [{
+                "id": 10, "name": "1099.pdf", "shared_at": "2026/01/18 18:30:18 -0500",
+                "size": 100, "content_type": "application/pdf"
+            }],
+        }]));
+        let env = document_list_json(&docs);
+        assert_eq!(env["schema"], "document-list/v1");
+        assert_eq!(env["items"].as_array().unwrap().len(), 1);
+        let item = &env["items"][0];
+        // Profile fields…
+        assert_eq!(item["id"], "10");
+        assert_eq!(item["date"], "2026-01-18");
+        // …plus provider extras folded on, nulls omitted (folder_name absent).
+        assert_eq!(item["size"], 100);
+        assert_eq!(item["content_type"], "application/pdf");
+        assert!(item.get("folder_name").is_none());
+    }
+
+    #[test]
+    fn default_download_name_strips_traversal_and_keeps_the_leaf() {
+        assert_eq!(default_download_name(Some("1099.pdf")), "1099.pdf");
+        // A crafted portal name can't escape the working directory.
+        assert_eq!(default_download_name(Some("../../etc/passwd")), "passwd");
+        assert_eq!(default_download_name(Some("/abs/dir/x.pdf")), "x.pdf");
+        // No usable leaf → safe fallback.
+        assert_eq!(default_download_name(Some("..")), "document.pdf");
+        assert_eq!(default_download_name(None), "document.pdf");
+    }
+
+    #[test]
+    fn document_list_extras_attach_to_their_own_document_by_id() {
+        // Each item must carry its OWN size, matched by id — not by position.
+        let docs = vec![
+            json!({ "id": 10, "name": "a.pdf", "size": 11 }),
+            json!({ "id": 20, "name": "b.pdf", "size": 22 }),
+        ];
+        let env = document_list_json(&docs);
+        for it in env["items"].as_array().unwrap() {
+            let expected = if it["id"] == "10" { 11 } else { 22 };
+            assert_eq!(it["size"], expected, "id {} got the wrong size", it["id"]);
+        }
     }
 }

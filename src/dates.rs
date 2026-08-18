@@ -8,6 +8,20 @@
 
 use pk_cli_core::{dates, CliError};
 
+/// The date portion of a portal timestamp (`2026/01/18 18:30:18 -0500`) as a
+/// validated, zero-padded ISO `YYYY-MM-DD`. Returns `None` for anything that
+/// isn't a real `YYYY/MM/DD …` date — `date` is the field cross-CLI
+/// documents/v1 consumers parse, so a malformed value is dropped rather than
+/// emitted verbatim. This is the portal→ISO counterpart of [`RangeArgs`]'s
+/// ISO→portal conversion; both live here per the module's date-translation role.
+pub fn date_from_portal_timestamp(ts: &str) -> Option<String> {
+    let date = ts.split_whitespace().next()?; // "2026/01/18"
+                                              // The portal date is year-first with slashes; ISO-shape it, then reuse the
+                                              // family parser so ranges/padding/validity are checked the same everywhere.
+    let iso = date.replace('/', "-");
+    dates::parse_iso(&iso).ok().map(dates::fmt_iso)
+}
+
 /// A start/end date range, shared by every range-scoped read.
 ///
 /// Named `--since` / `--until` to match `pk_cli_utility::RangeArgs` and the
@@ -139,5 +153,23 @@ mod tests {
             .resolve()
             .unwrap_err();
         assert!(matches!(err, CliError::Usage(_)));
+    }
+
+    #[test]
+    fn portal_timestamp_becomes_validated_iso_date() {
+        // Date portion only, zero-padded.
+        assert_eq!(
+            date_from_portal_timestamp("2026/01/18 18:30:18 -0500").as_deref(),
+            Some("2026-01-18")
+        );
+        // Single-digit month/day normalize (family parser is loose then pads).
+        assert_eq!(
+            date_from_portal_timestamp("2026/1/8 09:00:00 -0500").as_deref(),
+            Some("2026-01-08")
+        );
+        // Not a real date → dropped, not passed through.
+        assert_eq!(date_from_portal_timestamp("2026/13/01 00:00:00"), None);
+        assert_eq!(date_from_portal_timestamp("abcd/xx/yy"), None);
+        assert_eq!(date_from_portal_timestamp(""), None);
     }
 }

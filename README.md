@@ -149,15 +149,18 @@ Pull this year's 1099:
 
 ```console
 $ rpmfl documents list
-CATEGORY             | ID   | NAME                  | SHARED_AT           | SIZE
-shared               | 1001 | Owner_1099_2025.pdf   | 2026/01/18 18:30:18 | 34099
-management-agreement | 1002 | Management Agreement  | 2025/04/08 10:35:04 |
+ID   | NAME                 | CATEGORY             | DATE       | SIZE
+1001 | Owner_1099_2025.pdf  | shared               | 2026-01-18 | 34099
+1002 | Management Agreement | management-agreement | 2025-04-08 |
 
 $ rpmfl documents get 1001 -o ~/Documents/taxes/1099-2025.pdf
 ```
 
-Every read takes `--json`, which emits the portal payload plus a `schema` tag
-so downstream tools can version against it.
+`documents` follows the family's shared **`documents/v1`** profile: `list`
+emits a `document-list/v1` envelope (`.items[]` of `{id, name, category, date}`,
+with rpmfl's `shared_at`/`size`/`content_type`/`folder_name` kept as provider
+extras) and `get` emits `document-download/v1`. Every read takes `--json`, which emits the
+portal payload plus a `schema` tag so downstream tools can version against it.
 
 ## Configuration
 

@@ -218,7 +218,8 @@ fn run(cli: &Cli) -> Result<(), CliError> {
                     "forms",
                     "api",
                 ],
-            );
+            )
+            .with_profiles(&[pk_cli_documents::PROFILE]);
             output::json(&serde_json::to_value(&info).unwrap());
             Ok(())
         }
