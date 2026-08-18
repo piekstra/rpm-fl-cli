@@ -5,6 +5,7 @@
 //! fetches immediately rather than printing a link that will be dead by the
 //! time anyone clicks it. `--url` prints it anyway for piping.
 
+use std::collections::HashMap;
 use std::io::Write;
 
 use clap::{Args, Subcommand};
@@ -44,28 +45,7 @@ pub fn run(ctx: &Ctx, cmd: &Cmd) -> Result<(), CliError> {
 
     match cmd {
         Cmd::List => {
-            // Emit the documents/v1 envelope (`document-list/v1`), then fold
-            // rpmfl's provider extras back onto each item beside the profile
-            // fields — a documents/v1 consumer reads the known keys and ignores
-            // the rest (same pattern as fpl/wabhoa's provider extras).
-            let profile_docs: Vec<Document> = docs.iter().map(document_of).collect();
-            let mut env =
-                serde_json::to_value(Paged::new("document", profile_docs)).unwrap_or(Value::Null);
-            if let Some(items) = env.get_mut("items").and_then(Value::as_array_mut) {
-                for (item, raw) in items.iter_mut().zip(docs.iter()) {
-                    let Some(obj) = item.as_object_mut() else {
-                        continue;
-                    };
-                    for key in ["shared_at", "size", "content_type", "folder_name"] {
-                        match raw.get(key) {
-                            Some(v) if !v.is_null() => {
-                                obj.insert(key.to_string(), v.clone());
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
+            let env = document_list_json(&docs);
             if ctx.common.json {
                 output::json(&env);
             } else {
@@ -99,11 +79,21 @@ pub fn run(ctx: &Ctx, cmd: &Cmd) -> Result<(), CliError> {
             }
 
             let doc = document_of(raw);
-            let path = args
-                .output
-                .clone()
-                .or_else(|| doc.file.clone())
-                .unwrap_or_else(|| "document.pdf".to_string());
+            let path = match &args.output {
+                // An explicit `-o` target is the operator's own choice.
+                Some(o) => o.clone(),
+                // The default name comes from the portal, where other parties
+                // on the account (property manager, co-owners) control it — so
+                // reduce it to a bare leaf that can't traverse out of the cwd.
+                None => doc
+                    .file
+                    .as_deref()
+                    .map(std::path::Path::new)
+                    .and_then(std::path::Path::file_name)
+                    .map(|s| s.to_string_lossy().into_owned())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or_else(|| "document.pdf".to_string()),
+            };
             let bytes = client.download(url)?;
             std::fs::File::create(&path)
                 .and_then(|mut f| f.write_all(&bytes))
@@ -115,11 +105,56 @@ pub fn run(ctx: &Ctx, cmd: &Cmd) -> Result<(), CliError> {
                 // Full `document-download/v1`: the listed document's id/name/
                 // category/date carried through to what landed on disk.
                 let saved = SavedDocument::from_document(&doc, path, bytes.len() as u64);
-                output::json(&serde_json::to_value(saved).unwrap_or(Value::Null));
+                output::json(
+                    &serde_json::to_value(saved).expect("document-download/v1 serializes"),
+                );
             }
             Ok(())
         }
     }
+}
+
+/// The `document-list/v1` envelope: the documents/v1 [`Document`] items, plus
+/// rpmfl's provider extras (`shared_at`/`size`/`content_type`/`folder_name`)
+/// folded back onto each item beside the profile fields — a documents/v1
+/// consumer reads the known keys and ignores the rest (fpl/wabhoa pattern).
+///
+/// Extras are matched to their item **by id**, not by position, so a future
+/// cli-common that reorders/filters/paginates `Paged` items can only ever
+/// produce *missing* extras, never extras misattributed to another document.
+/// Pure (no `Ctx`/HTTP) so it is unit-tested directly.
+fn document_list_json(docs: &[Value]) -> Value {
+    let items: Vec<Document> = docs.iter().map(document_of).collect();
+    let mut env =
+        serde_json::to_value(Paged::new("document", items)).expect("document-list/v1 serializes");
+
+    let by_id: HashMap<String, &Value> = docs
+        .iter()
+        .filter_map(|d| d.get("id").map(|v| (scalar_id(v), d)))
+        .collect();
+    if let Some(arr) = env.get_mut("items").and_then(Value::as_array_mut) {
+        for item in arr {
+            let Some(obj) = item.as_object_mut() else {
+                continue;
+            };
+            let id = match obj.get("id").and_then(Value::as_str) {
+                Some(s) => s.to_string(),
+                None => continue,
+            };
+            let Some(raw) = by_id.get(id.as_str()) else {
+                continue;
+            };
+            for key in ["shared_at", "size", "content_type", "folder_name"] {
+                match raw.get(key) {
+                    Some(v) if !v.is_null() => {
+                        obj.insert(key.to_string(), v.clone());
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+    env
 }
 
 /// Map one raw portal document (as flattened by [`collect`]) onto a
@@ -141,24 +176,11 @@ fn document_of(raw: &Value) -> Document {
     d.date = raw
         .get("shared_at")
         .and_then(Value::as_str)
-        .and_then(iso_date);
+        .and_then(crate::dates::date_from_portal_timestamp);
     if !name.is_empty() {
         d.file = Some(name);
     }
     d
-}
-
-/// The date portion of a portal timestamp (`2026/01/18 18:30:18 -0500`) as ISO
-/// `YYYY-MM-DD`. `None` for anything that isn't `YYYY/MM/DD …`.
-fn iso_date(ts: &str) -> Option<String> {
-    let date = ts.split_whitespace().next()?;
-    let mut parts = date.split('/');
-    let (y, m, d) = (parts.next()?, parts.next()?, parts.next()?);
-    if y.len() == 4 && !m.is_empty() && !d.is_empty() {
-        Some(format!("{y}-{m}-{d}"))
-    } else {
-        None
-    }
 }
 
 /// The endpoint groups documents by owner and by kind; flatten them into one
@@ -260,12 +282,38 @@ mod tests {
     }
 
     #[test]
-    fn iso_date_extracts_the_date_portion() {
-        assert_eq!(
-            iso_date("2026/01/18 18:30:18 -0500").as_deref(),
-            Some("2026-01-18")
-        );
-        assert_eq!(iso_date(""), None);
-        assert_eq!(iso_date("not a date"), None);
+    fn document_list_json_is_the_profile_envelope_with_extras() {
+        let docs = collect(&json!([{
+            "id": 1, "name": "Owner",
+            "documents": [{
+                "id": 10, "name": "1099.pdf", "shared_at": "2026/01/18 18:30:18 -0500",
+                "size": 100, "content_type": "application/pdf"
+            }],
+        }]));
+        let env = document_list_json(&docs);
+        assert_eq!(env["schema"], "document-list/v1");
+        assert_eq!(env["items"].as_array().unwrap().len(), 1);
+        let item = &env["items"][0];
+        // Profile fields…
+        assert_eq!(item["id"], "10");
+        assert_eq!(item["date"], "2026-01-18");
+        // …plus provider extras folded on, nulls omitted (folder_name absent).
+        assert_eq!(item["size"], 100);
+        assert_eq!(item["content_type"], "application/pdf");
+        assert!(item.get("folder_name").is_none());
+    }
+
+    #[test]
+    fn document_list_extras_attach_to_their_own_document_by_id() {
+        // Each item must carry its OWN size, matched by id — not by position.
+        let docs = vec![
+            json!({ "id": 10, "name": "a.pdf", "size": 11 }),
+            json!({ "id": 20, "name": "b.pdf", "size": 22 }),
+        ];
+        let env = document_list_json(&docs);
+        for it in env["items"].as_array().unwrap() {
+            let expected = if it["id"] == "10" { 11 } else { 22 };
+            assert_eq!(it["size"], expected, "id {} got the wrong size", it["id"]);
+        }
     }
 }

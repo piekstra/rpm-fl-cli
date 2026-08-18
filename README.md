@@ -158,8 +158,8 @@ $ rpmfl documents get 1001 -o ~/Documents/taxes/1099-2025.pdf
 
 `documents` follows the family's shared **`documents/v1`** profile: `list`
 emits a `document-list/v1` envelope (`.items[]` of `{id, name, category, date}`,
-with rpmfl's `shared_at`/`size`/`content_type` kept as provider extras) and
-`get` emits `document-download/v1`. Every read takes `--json`, which emits the
+with rpmfl's `shared_at`/`size`/`content_type`/`folder_name` kept as provider
+extras) and `get` emits `document-download/v1`. Every read takes `--json`, which emits the
 portal payload plus a `schema` tag so downstream tools can version against it.
 
 ## Configuration
