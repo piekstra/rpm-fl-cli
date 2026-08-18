@@ -9,9 +9,10 @@ use std::io::Write;
 
 use clap::{Args, Subcommand};
 use pk_cli_core::{output, CliError};
+use pk_cli_documents::{Document, Paged, SavedDocument};
 use serde_json::{json, Value};
 
-use super::{emit, table_view, Ctx};
+use super::{table_view, Ctx};
 
 #[derive(Args, Debug)]
 pub struct GetArgs {
@@ -43,32 +44,51 @@ pub fn run(ctx: &Ctx, cmd: &Cmd) -> Result<(), CliError> {
 
     match cmd {
         Cmd::List => {
-            emit(
-                ctx,
-                "document-list",
-                json!({ "count": docs.len(), "documents": docs }),
-                |v| {
-                    let rows = v
-                        .get("documents")
-                        .and_then(Value::as_array)
-                        .cloned()
-                        .unwrap_or_default();
-                    output::table(&table_view(
-                        &rows,
-                        &["id", "name", "category", "shared_at", "size"],
-                    ));
-                },
-            );
+            // Emit the documents/v1 envelope (`document-list/v1`), then fold
+            // rpmfl's provider extras back onto each item beside the profile
+            // fields — a documents/v1 consumer reads the known keys and ignores
+            // the rest (same pattern as fpl/wabhoa's provider extras).
+            let profile_docs: Vec<Document> = docs.iter().map(document_of).collect();
+            let mut env =
+                serde_json::to_value(Paged::new("document", profile_docs)).unwrap_or(Value::Null);
+            if let Some(items) = env.get_mut("items").and_then(Value::as_array_mut) {
+                for (item, raw) in items.iter_mut().zip(docs.iter()) {
+                    let Some(obj) = item.as_object_mut() else {
+                        continue;
+                    };
+                    for key in ["shared_at", "size", "content_type", "folder_name"] {
+                        match raw.get(key) {
+                            Some(v) if !v.is_null() => {
+                                obj.insert(key.to_string(), v.clone());
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            if ctx.common.json {
+                output::json(&env);
+            } else {
+                let rows = env
+                    .get("items")
+                    .and_then(Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                output::table(&table_view(
+                    &rows,
+                    &["id", "name", "category", "date", "size"],
+                ));
+            }
             Ok(())
         }
         Cmd::Get(args) => {
-            let doc = docs
+            let raw = docs
                 .iter()
                 .find(|d| d.get("id").map(scalar_id) == Some(args.document_id.clone()))
                 .ok_or_else(|| {
                     CliError::NotFound(format!("no document with id {}", args.document_id))
                 })?;
-            let url = doc
+            let url = raw
                 .get("download_url")
                 .and_then(Value::as_str)
                 .ok_or_else(|| CliError::Upstream("document has no download URL".into()))?;
@@ -78,11 +98,12 @@ pub fn run(ctx: &Ctx, cmd: &Cmd) -> Result<(), CliError> {
                 return Ok(());
             }
 
-            let name = doc
-                .get("name")
-                .and_then(Value::as_str)
-                .unwrap_or("document.pdf");
-            let path = args.output.clone().unwrap_or_else(|| name.to_string());
+            let doc = document_of(raw);
+            let path = args
+                .output
+                .clone()
+                .or_else(|| doc.file.clone())
+                .unwrap_or_else(|| "document.pdf".to_string());
             let bytes = client.download(url)?;
             std::fs::File::create(&path)
                 .and_then(|mut f| f.write_all(&bytes))
@@ -91,14 +112,52 @@ pub fn run(ctx: &Ctx, cmd: &Cmd) -> Result<(), CliError> {
                 eprintln!("wrote {} ({} bytes)", path, bytes.len());
             }
             if ctx.common.json {
-                output::json(&json!({
-                    "schema": "document-download/v1",
-                    "path": path,
-                    "bytes": bytes.len(),
-                }));
+                // Full `document-download/v1`: the listed document's id/name/
+                // category/date carried through to what landed on disk.
+                let saved = SavedDocument::from_document(&doc, path, bytes.len() as u64);
+                output::json(&serde_json::to_value(saved).unwrap_or(Value::Null));
             }
             Ok(())
         }
+    }
+}
+
+/// Map one raw portal document (as flattened by [`collect`]) onto a
+/// documents/v1 [`Document`]. The portal's `name` is the filename, so it also
+/// serves as `file` (the default save name). No financial fields — a document
+/// is just what an archiver needs to file and fetch it.
+fn document_of(raw: &Value) -> Document {
+    let id = raw.get("id").map(scalar_id).unwrap_or_default();
+    let name = raw
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let mut d = Document::new(id, name.clone());
+    d.category = raw
+        .get("category")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    d.date = raw
+        .get("shared_at")
+        .and_then(Value::as_str)
+        .and_then(iso_date);
+    if !name.is_empty() {
+        d.file = Some(name);
+    }
+    d
+}
+
+/// The date portion of a portal timestamp (`2026/01/18 18:30:18 -0500`) as ISO
+/// `YYYY-MM-DD`. `None` for anything that isn't `YYYY/MM/DD …`.
+fn iso_date(ts: &str) -> Option<String> {
+    let date = ts.split_whitespace().next()?;
+    let mut parts = date.split('/');
+    let (y, m, d) = (parts.next()?, parts.next()?, parts.next()?);
+    if y.len() == 4 && !m.is_empty() && !d.is_empty() {
+        Some(format!("{y}-{m}-{d}"))
+    } else {
+        None
     }
 }
 
@@ -177,5 +236,36 @@ mod tests {
     fn ids_compare_as_strings() {
         assert_eq!(scalar_id(&json!(42)), "42");
         assert_eq!(scalar_id(&json!("42")), "42");
+    }
+
+    #[test]
+    fn document_of_conforms_to_documents_v1() {
+        let raw = collect(&json!([{
+            "id": 1, "name": "Owner",
+            "documents": [{ "id": 10, "name": "1099.pdf", "shared_at": "2026/01/18 18:30:18 -0500", "size": 100 }],
+        }]))[0]
+            .clone();
+        let v = serde_json::to_value(document_of(&raw)).unwrap();
+        assert_eq!(v["id"], "10"); // numeric portal id → string
+        assert_eq!(v["name"], "1099.pdf");
+        assert_eq!(v["category"], "shared");
+        assert_eq!(v["date"], "2026-01-18"); // timestamp → ISO date portion
+        assert_eq!(v["file"], "1099.pdf"); // name doubles as the save filename
+        assert!(
+            v.get("amount").is_none(),
+            "no financial fields on a document"
+        );
+        // Round-trips through the profile type.
+        let _: Document = serde_json::from_value(v).unwrap();
+    }
+
+    #[test]
+    fn iso_date_extracts_the_date_portion() {
+        assert_eq!(
+            iso_date("2026/01/18 18:30:18 -0500").as_deref(),
+            Some("2026-01-18")
+        );
+        assert_eq!(iso_date(""), None);
+        assert_eq!(iso_date("not a date"), None);
     }
 }
