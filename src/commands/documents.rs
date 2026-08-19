@@ -34,7 +34,8 @@ pub enum Cmd {
     /// List every shared document.
     #[command(visible_alias = "ls")]
     List,
-    /// Download one document by ID.
+    /// Download one document by ID. `download` is the family-standard spelling.
+    #[command(visible_alias = "download")]
     Get(GetArgs),
 }
 
