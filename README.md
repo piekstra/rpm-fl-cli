@@ -21,7 +21,7 @@ estimate, or changes a setting.
 ```console
 # from source (recent stable Rust; MSRV 1.88)
 $ cargo install --git https://github.com/piekstra/rpm-fl-cli --locked
-$ make install        # cargo install --path . --force
+$ make install        # cargo install --locked --path . --force
 ```
 
 Prebuilt tarballs ship with each release; `rpmfl self-update` pulls the latest.
