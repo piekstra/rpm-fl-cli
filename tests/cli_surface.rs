@@ -186,3 +186,16 @@ fn completions_generate_for_each_shell() {
             .stdout(predicate::str::contains("rpmfl"));
     }
 }
+
+/// Any non-empty `NO_COLOR` disables color (no-color.org); none of the
+/// conventional values may turn into a usage error.
+#[test]
+fn no_color_in_the_environment_never_fails_a_command() {
+    for v in ["1", "true", "0", ""] {
+        rpmfl()
+            .env("NO_COLOR", v)
+            .args(["completions", "bash"])
+            .assert()
+            .success();
+    }
+}
