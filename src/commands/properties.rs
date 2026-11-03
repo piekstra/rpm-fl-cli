@@ -114,7 +114,7 @@ mod tests {
                 "address": { "attributes": { "full": "100 Sample St, Sample City, ST 00000" } },
                 "units": [
                     { "attributes": { "occupied": true, "unit_total_rent_and_subsidy": 1000 },
-                      "relationships": { "current_occupancy": { "relationships": { "lease": { "attributes": { "end_on": "2027-05-31" } } } } } },
+                      "relationships": { "current_occupancy": { "relationships": { "lease": { "attributes": { "end_on": "2030-01-31" } } } } } },
                     { "attributes": { "occupied": false, "unit_total_rent_and_subsidy": 900 },
                       "relationships": { "current_occupancy": { "relationships": { "lease": { "attributes": { "end_on": "2026-11-30" } } } } } }
                 ]

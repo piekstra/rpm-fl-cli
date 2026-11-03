@@ -34,6 +34,9 @@ pub const PENDING_SESSION_ACCOUNT: &str = "pending-session";
 /// it to browser-side fingerprinting, so it rarely spares a plain HTTP client
 /// the challenge — stored and replayed anyway since it costs one cookie.
 pub const DEVICE_TOKEN_ACCOUNT: &str = "device-token";
+/// The bearer token `rpmfl mcp --new-token` stores for `--http`. cli-common owns
+/// the name; `auth logout --forget` removes it with the other credentials.
+pub const MCP_TOKEN_ACCOUNT: &str = "mcp-http-token";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {

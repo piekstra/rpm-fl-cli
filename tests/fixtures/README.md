@@ -24,8 +24,9 @@ Structure is preserved **exactly** — key names, nesting, types, null-vs-absent
 | UUIDs | `00000000-0000-4000-8000-…` |
 | Pre-signed S3 `download_url` / `display_url` | `https://example.invalid/presigned-url-redacted` |
 | File sizes | `1024` |
+| Lease and move-in dates | far-future dummies (`2030-01-31`, `2029-01-01`) |
 
-Dates, booleans, enum-ish strings (`cashIn`, `disbursement`), file names, and
+Other dates, booleans, enum-ish strings (`cashIn`, `disbursement`), file names, and
 content types are kept verbatim — they carry no personal information and the
 parsing logic depends on their exact form.
 

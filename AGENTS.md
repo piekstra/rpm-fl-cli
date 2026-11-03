@@ -8,8 +8,9 @@ Guidance for AI coding agents (and humans) working in this repo. Tool-agnostic;
 `rpmfl` — a Rust CLI for the AppFolio **owner portal** that Real Property
 Management franchises hand to rental-property owners. A thin, portal-specific
 layer over the shared [`cli-common`](https://github.com/piekstra/cli-common)
-`pk-cli-*` crates (auth, http, config, secrets, self-update). This repo owns
-only the portal client, the commands, and their DTOs.
+`pk-cli-*` crates (auth, http, config, secrets, self-update, MCP), pinned to
+**v0.21.0**. This repo owns
+only the portal client, the commands, their DTOs, and the tools `rpmfl mcp` serves.
 
 There is no official API. Everything targets the undocumented JSON endpoints
 the portal's own front end calls, mapped by watching its XHR traffic and
@@ -34,7 +35,12 @@ Run `make verify` before considering a change done — it's exactly what CI runs
   explains the auth model and why the device-trust token isn't usable here.
 - `src/commands/*.rs` — one module per command group; `misc.rs` holds the
   small single-endpoint reads. Each renders a human table and a `--json` DTO.
-- `src/config.rs` — non-secret config; every secret is keychain-only.
+- `src/config.rs` — non-secret config; secrets live in the keychain (`rpmfl mcp` also
+  reads `$RPMFL_SESSION` first).
+- `src/mcp.rs` — `rpmfl mcp`: read-only tools over the `Reads` seam, which offers GETs
+  to fixed paths alone. Its module doc says why it never signs in, never sends the
+  password and never writes the keychain. `tests/mcp_readonly.rs` holds every tool to
+  the read endpoints against a stub portal.
 - `src/dates.rs` — ISO ⇄ the portal's `MM/DD/YYYY`, plus `RangeArgs`.
 - `tests/` — offline surface + contract tests, and `tests/fixtures/` (read its
   README before touching a fixture).
@@ -54,7 +60,8 @@ Run `make verify` before considering a change done — it's exactly what CI runs
   (exit 6 otherwise) — and this section must stop saying "read-only".
 - **Secrets** come from the OS keychain or stdin — never argv, never logs,
   never a file in the repo. Service `piekstra.rpmfl`, accounts `password`,
-  `session`, `device-token`.
+  `session`, `device-token`, `mcp-http-token` (`rpmfl mcp --http`'s bearer token).
+  `auth logout --forget` removes them all.
 - **Dates** are ISO `YYYY-MM-DD` at the CLI boundary, converted in `dates.rs`.
   Never surface the portal's `MM/DD/YYYY` in a flag.
 
@@ -98,9 +105,9 @@ through `diag::keychain`, so no wait is ever silent. It never shortens a wait;
   balance, or account/property ID.
 - `tests/fixtures/` are **scrubbed** captures: structure preserved exactly,
   every identifying and financial value replaced with an obvious dummy. The
-  policy is in `tests/fixtures/README.md`, and `fixtures_carry_no_real_
-  identifiers` in `tests/fixture_shapes.rs` enforces it. Extend that test's
-  banned list when you add a new kind of identifier.
+  policy is in `tests/fixtures/README.md`, and `fixtures_carry_only_dummy_identifiers`
+  in `tests/fixture_shapes.rs` enforces it by shape, never as a list of real values,
+  which would publish them. Extend its shapes when you add a new kind of identifier.
 - Don't paste real portal output into an issue, commit message, or doc example.
   The README's examples use scrubbed figures.
 

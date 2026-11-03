@@ -9,6 +9,7 @@ mod commands;
 mod config;
 mod dates;
 mod diag;
+mod mcp;
 
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::Shell;
@@ -22,7 +23,8 @@ use pk_cli_selfupdate::{SelfUpdateArgs, Updater};
 use client::{CodeChannel, LoginOutcome, Portal};
 use commands::{api, bills, documents, misc, properties, summary, transactions, Ctx};
 use config::{
-    Config, DEVICE_TOKEN_ACCOUNT, KEYCHAIN_ACCOUNT, PENDING_SESSION_ACCOUNT, SESSION_ACCOUNT,
+    Config, DEVICE_TOKEN_ACCOUNT, KEYCHAIN_ACCOUNT, MCP_TOKEN_ACCOUNT, PENDING_SESSION_ACCOUNT,
+    SESSION_ACCOUNT,
 };
 use dates::RangeArgs;
 
@@ -94,6 +96,12 @@ enum Command {
     Forms,
     /// Raw portal API passthrough.
     Api(api::ApiArgs),
+    /// Serve read-only tools to Claude and other MCP clients.
+    ///
+    /// Over stdio for Claude Code and Claude Desktop, or with --http on
+    /// 127.0.0.1 for your own Cloudflare Worker (claude.ai on the web and
+    /// mobile). No tool can approve, sign, pay or change anything at the portal.
+    Mcp(pk_cli_mcp::McpArgs),
     /// Update to the latest release from GitHub.
     SelfUpdate(SelfUpdateArgs),
     /// Print a shell completion script.
@@ -108,7 +116,8 @@ enum AuthCmd {
     Login(PortalLoginArgs),
     /// Report credential and session state (auth-status/v1).
     Status(StatusArgs),
-    /// Clear the cached session; --forget also removes the stored password.
+    /// Clear the cached session; --forget also removes the stored password, device
+    /// token and `rpmfl mcp --http` bearer token.
     Logout(LogoutArgs),
     /// Raw keychain write for rotation / headless setup.
     SetCredential(SetCredentialArgs),
@@ -158,6 +167,11 @@ fn main() {
 }
 
 fn run(cli: &Cli) -> Result<(), CliError> {
+    // Before the config is read: listing the tools touches no file, and a bad
+    // config must not stop the server from answering with a usable error.
+    if let Command::Mcp(args) = &cli.command {
+        return pk_cli_mcp::run(args, mcp::tools(cli.timeout));
+    }
     let store = ConfigStore::new(BIN);
     let creds = CredentialStore::for_binary(BIN);
     let mut cfg: Config = store.load()?;
@@ -184,13 +198,19 @@ fn run(cli: &Cli) -> Result<(), CliError> {
         Command::Approvals { page } => misc::approvals(&ctx, *page),
         Command::Forms => misc::forms(&ctx),
         Command::Api(args) => api::run(&ctx, args),
+        Command::Mcp(_) => unreachable!("served before the config is read"),
         Command::SelfUpdate(args) => Updater {
             repo: REPO.into(),
             binary: BIN.into(),
             target: env!("BUILD_TARGET").into(),
             current: env!("CARGO_PKG_VERSION").into(),
         }
-        .run(args, cli.common.json, cli.common.quiet),
+        .run_noting(
+            args,
+            cli.common.json,
+            cli.common.quiet,
+            &pk_cli_mcp::restart_note(BIN),
+        ),
         Command::Completions { shell } => {
             clap_complete::generate(*shell, &mut Cli::command(), BIN, &mut std::io::stdout());
             Ok(())
@@ -217,6 +237,7 @@ fn run(cli: &Cli) -> Result<(), CliError> {
                     "approvals",
                     "forms",
                     "api",
+                    "mcp",
                 ],
             )
             .with_profiles(&[pk_cli_documents::PROFILE]);
@@ -310,9 +331,18 @@ fn auth(
             if args.forget {
                 creds.delete(KEYCHAIN_ACCOUNT)?;
                 creds.delete(DEVICE_TOKEN_ACCOUNT)?;
+                // So the next server to start cannot reuse it. A running server read
+                // the token at its start and keeps it in memory, and the variable is
+                // beyond this command: the message says what those take.
+                creds.delete(MCP_TOKEN_ACCOUNT)?;
                 store.clear()?;
                 if !cli.common.quiet {
-                    eprintln!("session cleared; password and device token removed");
+                    eprintln!(
+                        "session cleared; password, device token and `mcp --http` token \
+                         removed. A running `rpmfl mcp --http` keeps accepting the old token \
+                         until it stops: stop it, and unset $RPMFL_MCP_TOKEN if it is set. A \
+                         connector still in use needs `rpmfl mcp --new-token`."
+                    );
                 }
             } else if !cli.common.quiet {
                 eprintln!("session cleared (password kept; use --forget to remove it)");

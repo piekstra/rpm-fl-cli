@@ -188,17 +188,19 @@ fn document_of(raw: &Value) -> Document {
     d
 }
 
+/// Where `shared_documents` keeps documents in each owner's record, and the
+/// category each key means.
+pub const GROUPS: [(&str, &str); 5] = [
+    ("documents", "shared"),
+    ("management_agreement_documents", "management-agreement"),
+    ("uploaded_pdf_management_agreements", "management-agreement"),
+    ("pdf_template_management_agreements", "management-agreement"),
+    ("insurance_policy_documents", "insurance"),
+];
+
 /// The endpoint groups documents by owner and by kind; flatten them into one
 /// list, tagging each with the category it came from.
 fn collect(payload: &Value) -> Vec<Value> {
-    const GROUPS: [(&str, &str); 5] = [
-        ("documents", "shared"),
-        ("management_agreement_documents", "management-agreement"),
-        ("uploaded_pdf_management_agreements", "management-agreement"),
-        ("pdf_template_management_agreements", "management-agreement"),
-        ("insurance_policy_documents", "insurance"),
-    ];
-
     let owners = payload.as_array().cloned().unwrap_or_default();
     let mut out = Vec::new();
     for owner in &owners {

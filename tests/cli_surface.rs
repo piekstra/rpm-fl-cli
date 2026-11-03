@@ -10,6 +10,7 @@ fn rpmfl() -> Command {
 
 /// Every top-level command, for the help-tree walk below.
 const COMMANDS: &[&str] = &[
+    "mcp",
     "auth",
     "config",
     "summary",

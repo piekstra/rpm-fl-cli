@@ -23,12 +23,12 @@
                   "id": "31",
                   "type": "leases",
                   "attributes": {
-                    "end_on": "2027-05-31"
+                    "end_on": "2030-01-31"
                   }
                 }
               },
               "attributes": {
-                "move_in": "2025-06-28"
+                "move_in": "2029-01-01"
               }
             }
           },
