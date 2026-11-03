@@ -89,7 +89,7 @@ rpmfl statements [--limit N]                            # published owner packet
 rpmfl approvals [--page N]                              # estimates awaiting your decision
 rpmfl forms                                             # documents needing a signature
 rpmfl api <PATH> [--query k=v]                          # raw portal passthrough
-rpmfl mcp [--http --port N]                             # read-only tools for Claude
+rpmfl mcp [--new-token | --http --port 8751]            # read-only tools for Claude
 rpmfl auth login|status [--verify]|logout|set-credential # credentials and session
 rpmfl config path|show|set|unset                        # non-secret settings
 rpmfl completions <shell> | rpmfl info | rpmfl self-update
@@ -146,7 +146,8 @@ Any other MCP client that launches a local server can run `rpmfl mcp`.
 
 The tools never sign in, never send your password and never ask for a two-factor code.
 When the portal's session expires, they say so, and you run `rpmfl auth login` again.
-They read `$RPMFL_SESSION` first if it is set, then the keychain. A session in that
+That can also follow a restart of the server, which keeps a rotated session cookie in
+memory only. They read `$RPMFL_SESSION` first if it is set, then the keychain. A session in that
 variable that has expired must be replaced or unset where it is set, and the server
 restarted, since the keychain is not read while it is set.
 

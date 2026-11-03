@@ -65,7 +65,9 @@ Rails re-issues `_oportal_session` whenever it feels like it, so the cookie a
 client holds drifts from the one the portal considers current. `rpmfl` writes
 the rotated value back to the keychain after every successful read; a client
 that kept replaying its original cookie would eventually be logged out even
-though the portal had just handed it a live session.
+though the portal had just handed it a live session. `rpmfl mcp` keeps the rotated
+value in memory and does not write it back, so a restarted server replays the stored
+one.
 
 ### Session expiry
 
@@ -140,9 +142,10 @@ The tools use `GET` on `owner_properties`, `owner_transactions`, `owner_income_b
 `owner_expenses_balances`, `unpaid_bills_balances`, `owner_decision_requests`,
 `pdf_forms/actionable_documents`, `tenant_charges` and `shared_documents/`, and nothing
 else. They never send the ledger's `type` filter, which answers HTTP 500 on
-`disbursement`; a tool selects kinds itself. `tenant_charges` takes no paging arguments,
-so `rpm_rent` assumes one answer holds the period; that has not been checked against a
-period of more than the captured eight rows. A tool drops `download_url`, `display_url`
+`disbursement`; a tool selects kinds itself. `tenant_charges` takes no paging arguments
+and gives no sign of a cap, and the longest answer captured is eight rows, so `rpm_rent`
+refuses a period over a year, and says its total covers the rows the portal returned.
+Whether the portal caps a long answer has not been observed. A tool drops `download_url`, `display_url`
 and ledger `attachments`: a pre-signed link works without a sign-in. Approval and form
 rows are only counted, since no non-empty row has been captured.
 

@@ -290,7 +290,7 @@ fn properties_list_occupancy_and_the_earliest_lease_end() {
         json!({"response_format": "detailed"}),
     );
     assert_eq!(got["items"][0]["id"], "1");
-    assert_eq!(got["items"][0]["minimum_cash_reserve"], 500.0);
+    assert_eq!(got["items"][0]["minimum_cash_reserve"], "500.00");
 }
 
 fn property_with_units(units: Value) -> Value {
@@ -588,6 +588,29 @@ fn rent_for_another_property_is_left_out_of_the_rows_and_the_total() {
     assert_eq!(got["returned"], 7);
 }
 
+/// The portal gives no sign of a cap on this list, so a wide ask is refused rather
+/// than risk a short answer passing for the whole.
+#[test]
+fn rent_over_more_than_a_year_is_refused_before_any_read() {
+    let fixtures = Fixtures::new();
+    let reads = fixtures.reads.clone();
+    let tools = tools_over(fixtures);
+    let text = error(
+        &tools,
+        "rpm_rent",
+        json!({"since": "2024-01-01", "until": "2025-01-02"}),
+    );
+    assert!(text.starts_with("usage:"), "{text}");
+    assert!(text.contains("a year"), "{text}");
+    assert_eq!(reads.get(), 0);
+
+    ok(
+        &tools,
+        "rpm_rent",
+        json!({"since": "2024-01-02", "until": "2025-01-02"}),
+    );
+}
+
 #[test]
 fn rent_that_changed_shape_is_an_error_not_nothing_owed() {
     for field in ["balance", "amount", "occurredOn", "propertyId"] {
@@ -738,7 +761,7 @@ fn a_rotated_cookie_is_sent_while_the_stored_session_is_the_one_it_replaced() {
     let stored = secret("stored");
     assert_eq!(rotated.current(&stored).expose(), "stored");
 
-    rotated.record(&stored, &Ok(json!([])), Some(secret("rotated")));
+    rotated.record(&stored, &stored, Some(secret("rotated")));
     assert_eq!(rotated.current(&stored).expose(), "rotated");
 
     // A new sign-in changed what is stored, which retires the rotated copy.
@@ -748,15 +771,25 @@ fn a_rotated_cookie_is_sent_while_the_stored_session_is_the_one_it_replaced() {
     );
 }
 
+/// Two reads leave with one cookie; the slower must not undo the faster's rotation.
 #[test]
-fn a_rejected_cookie_is_dropped_and_a_network_failure_keeps_it() {
-    let stored = secret("stored");
+fn a_late_read_does_not_put_an_older_cookie_back() {
     let mut rotated = Rotated::default();
-    rotated.record(&stored, &Ok(json!([])), Some(secret("rotated")));
+    let stored = secret("stored");
+    rotated.record(&stored, &stored, Some(secret("newer")));
+    rotated.record(&stored, &stored, Some(secret("older")));
+    assert_eq!(rotated.current(&stored).expose(), "newer");
 
-    rotated.record(&stored, &Err(CliError::Upstream("HTTP 503".into())), None);
+    // A read that sent the newer cookie moves it on.
+    rotated.record(&stored, &secret("newer"), Some(secret("newest")));
+    assert_eq!(rotated.current(&stored).expose(), "newest");
+}
+
+#[test]
+fn a_read_with_no_cookie_to_show_changes_nothing() {
+    let mut rotated = Rotated::default();
+    let stored = secret("stored");
+    rotated.record(&stored, &stored, Some(secret("rotated")));
+    rotated.record(&stored, &secret("rotated"), None);
     assert_eq!(rotated.current(&stored).expose(), "rotated");
-
-    rotated.record(&stored, &Err(CliError::Auth("expired".into())), None);
-    assert_eq!(rotated.current(&stored).expose(), "stored");
 }

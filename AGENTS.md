@@ -60,7 +60,8 @@ Run `make verify` before considering a change done — it's exactly what CI runs
   (exit 6 otherwise) — and this section must stop saying "read-only".
 - **Secrets** come from the OS keychain or stdin — never argv, never logs,
   never a file in the repo. Service `piekstra.rpmfl`, accounts `password`,
-  `session`, `device-token`.
+  `session`, `device-token`, `mcp-http-token` (`rpmfl mcp --http`'s bearer token).
+  `auth logout --forget` removes them all.
 - **Dates** are ISO `YYYY-MM-DD` at the CLI boundary, converted in `dates.rs`.
   Never surface the portal's `MM/DD/YYYY` in a flag.
 
@@ -104,9 +105,9 @@ through `diag::keychain`, so no wait is ever silent. It never shortens a wait;
   balance, or account/property ID.
 - `tests/fixtures/` are **scrubbed** captures: structure preserved exactly,
   every identifying and financial value replaced with an obvious dummy. The
-  policy is in `tests/fixtures/README.md`, and `fixtures_carry_no_real_
-  identifiers` in `tests/fixture_shapes.rs` enforces it. Extend that test's
-  banned list when you add a new kind of identifier.
+  policy is in `tests/fixtures/README.md`, and `fixtures_carry_only_dummy_identifiers`
+  in `tests/fixture_shapes.rs` enforces it by shape, never as a list of real values,
+  which would publish them. Extend its shapes when you add a new kind of identifier.
 - Don't paste real portal output into an issue, commit message, or doc example.
   The README's examples use scrubbed figures.
 

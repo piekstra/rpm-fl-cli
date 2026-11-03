@@ -18,6 +18,8 @@ one owner and reads their financial data. The things worth protecting:
   (account `device-token`). Both are credentials: anyone holding the session
   cookie can read the account until the portal expires it. They live in the
   keychain and are redacted from all output.
+- **The `rpmfl mcp --http` bearer token** (account `mcp-http-token`), which lets
+  your own connector reach the tools on this machine.
 - **Pre-signed document URLs.** The portal returns S3 links that grant
   unauthenticated access to a document for ~5 minutes. `rpmfl documents get`
   fetches immediately; `--url` prints one only when explicitly asked. Never
@@ -42,8 +44,10 @@ tool never signs in, prompts, sends your password, reads the device token, asks 
 two-factor code, or creates or changes a keychain item, so a background server cannot
 lock your account by retrying a stale password or send you text messages, however often
 it restarts. The portal may rotate the session cookie on a response; the server keeps
-the new copy in memory until the stored session changes or the portal refuses it. A
-missing or expired session is an error asking the user to run `rpmfl auth login` in a
+the new copy in memory until the stored session changes, and never writes it to the
+keychain, since a write from a background server could block on a dialog. So a restart
+falls back to the stored cookie, and if that has gone stale, `rpmfl auth login` is needed
+even though the session was in use. A missing or expired session is an error asking the user to run `rpmfl auth login` in a
 terminal; while `$RPMFL_SESSION` is set, the keychain is not read, so the error asks the
 user to replace or unset the variable instead. The Claude Desktop extension (`.mcpb`)
 takes no settings and so holds no credential of its own; on macOS its bundled binary
@@ -89,5 +93,6 @@ $ op read 'op://Private/your-portal-item/password' \
     | rpmfl auth set-credential --stdin --overwrite
 ```
 
-`rpmfl auth logout --forget` removes the password, session, and device token
+`rpmfl auth logout --forget` removes the password, session, device token and `mcp
+--http` token
 from the keychain and clears the config.

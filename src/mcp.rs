@@ -8,7 +8,11 @@
 //! person) and never writes the keychain: a lapsed session is an auth error naming
 //! `rpmfl auth login`. The portal may rotate the session cookie on any response;
 //! the server keeps the newest copy in memory, for as long as the keychain still
-//! holds the session it came from, so a new sign-in takes effect at once.
+//! holds the session it came from, so a new sign-in takes effect at once. A restart
+//! loses that copy and falls back to the stored one, which may have gone stale:
+//! then `rpmfl auth login` is needed even though the session was in use. A write
+//! back from a background server could block on a keychain dialog, so that is the
+//! trade made here.
 //!
 //! The commands' mappers are best-effort, for a person who can see the raw
 //! payload. A tool's answer goes to a model as fact, so an answer the portal did
@@ -100,17 +104,17 @@ impl Rotated {
         }
     }
 
-    /// Remember what a read left behind. A rejected copy is no use to keep, and
-    /// a failure that says nothing about the session changes nothing.
-    fn record(&mut self, stored: &Secret, read: &Result<Value, CliError>, newest: Option<Secret>) {
-        match read {
-            Err(CliError::Auth(_)) => self.0 = None,
-            Err(_) => {}
-            Ok(_) => {
-                if let Some(newest) = newest {
-                    self.0 = Some((Secret::new(stored.expose()), newest));
-                }
-            }
+    /// Remember the cookie a good read left behind. A slower read can finish after
+    /// a newer cookie arrived, and must not put its older one back.
+    ///
+    /// An auth failure clears nothing: a 403 or an HTML page may be the portal's
+    /// edge and not a refused session, and a new sign-in retires this copy anyway.
+    fn record(&mut self, stored: &Secret, sent: &Secret, newest: Option<Secret>) {
+        let Some(newest) = newest else {
+            return;
+        };
+        if self.current(stored).expose() == sent.expose() {
+            self.0 = Some((Secret::new(stored.expose()), newest));
         }
     }
 }
@@ -142,7 +146,9 @@ impl Reads for LivePortal {
         let portal = Portal::new(base, cfg.timeout())?;
         portal.seed_session(send.expose());
         let read = portal.get(path, query);
-        self.lock().record(&stored, &read, portal.session_cookie());
+        if read.is_ok() {
+            self.lock().record(&stored, &send, portal.session_cookie());
+        }
         read
     }
 }
@@ -238,6 +244,26 @@ impl Period {
     }
 }
 
+impl Period {
+    /// `tenant_charges` takes no paging arguments and gives no sign of a cap, and
+    /// the longest answer observed is under a year's. A wider ask could come back
+    /// short and pass for the whole, so it is refused.
+    fn at_most_a_year(&self) -> Result<(), ToolError> {
+        let (since, until) = (
+            dates::parse_iso(&self.since)?,
+            dates::parse_iso(&self.until)?,
+        );
+        if since < (until.0 - 1, until.1, until.2) {
+            return Err(ToolError::usage(format!(
+                "rent charges are read at most a year at a time, and {} to {} is longer; \
+                 narrow since/until and call again for the rest",
+                self.since, self.until
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// A date argument, checked here so its error names the argument.
 fn valid_day(arg: &str, value: &Option<String>) -> Result<Option<String>, ToolError> {
     let Some(value) = value.as_deref().map(str::trim).filter(|v| !v.is_empty()) else {
@@ -294,7 +320,7 @@ struct PropertyItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    minimum_cash_reserve: Option<f64>,
+    minimum_cash_reserve: Option<String>,
 }
 
 /// A ledger entry's kind.
@@ -664,7 +690,7 @@ impl<R: Reads> RpmTools<R> {
                 rent: dollars(p.rent),
                 lease_end: p.lease_end,
                 id: detailed.then_some(p.id),
-                minimum_cash_reserve: p.minimum_cash_reserve.filter(|_| detailed),
+                minimum_cash_reserve: p.minimum_cash_reserve.filter(|_| detailed).map(dollars),
             })
             .collect();
         ToolOutput::new(&page.page(items, "limit")?)
@@ -758,6 +784,7 @@ impl<R: Reads> RpmTools<R> {
     fn rent(&self, args: Value) -> Result<ToolOutput, ToolError> {
         let args: RentArgs = parse_args(args)?;
         let period = Period::of(&args.since, &args.until)?;
+        period.at_most_a_year()?;
         let named = named_property(args.property.as_deref());
         let page = PageRequest::new(
             &args.list,
@@ -935,10 +962,10 @@ impl<R: Reads> Toolset for RpmTools<R> {
             ToolDef::read(
                 "rpm_rent",
                 "Rent charged to tenants",
-                "Lists rent charged to the user's tenants, newest first. Use it to check whether \
-                 rent was paid and what is still owed. Returns since, until, outstanding across \
-                 the period, and items with date, amount, balance and property (detailed adds \
-                 id). Narrow with since/until or property.",
+                "Lists rent charged to the user's tenants, newest first, a year at most. Use it \
+                 to check whether rent was paid and what is still owed. Returns since, until, \
+                 outstanding across the rows the portal returned, and items with date, amount, \
+                 balance and property (detailed adds id). Narrow with since/until or property.",
             )
             .input::<RentArgs>()
             .output::<RentOut>(),

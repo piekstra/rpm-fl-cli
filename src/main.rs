@@ -23,7 +23,8 @@ use pk_cli_selfupdate::{SelfUpdateArgs, Updater};
 use client::{CodeChannel, LoginOutcome, Portal};
 use commands::{api, bills, documents, misc, properties, summary, transactions, Ctx};
 use config::{
-    Config, DEVICE_TOKEN_ACCOUNT, KEYCHAIN_ACCOUNT, PENDING_SESSION_ACCOUNT, SESSION_ACCOUNT,
+    Config, DEVICE_TOKEN_ACCOUNT, KEYCHAIN_ACCOUNT, MCP_TOKEN_ACCOUNT, PENDING_SESSION_ACCOUNT,
+    SESSION_ACCOUNT,
 };
 use dates::RangeArgs;
 
@@ -329,9 +330,15 @@ fn auth(
             if args.forget {
                 creds.delete(KEYCHAIN_ACCOUNT)?;
                 creds.delete(DEVICE_TOKEN_ACCOUNT)?;
+                // A connector still holding this token would reach whoever signs
+                // in next on this machine.
+                creds.delete(MCP_TOKEN_ACCOUNT)?;
                 store.clear()?;
                 if !cli.common.quiet {
-                    eprintln!("session cleared; password and device token removed");
+                    eprintln!(
+                        "session cleared; password, device token and `mcp --http` token removed \
+                         (a connector still in use needs a new one: `rpmfl mcp --new-token`)"
+                    );
                 }
             } else if !cli.common.quiet {
                 eprintln!("session cleared (password kept; use --forget to remove it)");
