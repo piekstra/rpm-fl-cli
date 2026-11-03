@@ -116,7 +116,8 @@ enum AuthCmd {
     Login(PortalLoginArgs),
     /// Report credential and session state (auth-status/v1).
     Status(StatusArgs),
-    /// Clear the cached session; --forget also removes the stored password.
+    /// Clear the cached session; --forget also removes the stored password, device
+    /// token and `rpmfl mcp --http` bearer token.
     Logout(LogoutArgs),
     /// Raw keychain write for rotation / headless setup.
     SetCredential(SetCredentialArgs),
@@ -330,14 +331,17 @@ fn auth(
             if args.forget {
                 creds.delete(KEYCHAIN_ACCOUNT)?;
                 creds.delete(DEVICE_TOKEN_ACCOUNT)?;
-                // A connector still holding this token would reach whoever signs
-                // in next on this machine.
+                // So the next server to start cannot reuse it. A running server read
+                // the token at its start and keeps it in memory, and the variable is
+                // beyond this command: the message says what those take.
                 creds.delete(MCP_TOKEN_ACCOUNT)?;
                 store.clear()?;
                 if !cli.common.quiet {
                     eprintln!(
-                        "session cleared; password, device token and `mcp --http` token removed \
-                         (a connector still in use needs a new one: `rpmfl mcp --new-token`)"
+                        "session cleared; password, device token and `mcp --http` token \
+                         removed. A running `rpmfl mcp --http` keeps accepting the old token \
+                         until it stops: stop it, and unset $RPMFL_MCP_TOKEN if it is set. A \
+                         connector still in use needs `rpmfl mcp --new-token`."
                     );
                 }
             } else if !cli.common.quiet {
