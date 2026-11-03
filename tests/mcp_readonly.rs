@@ -151,10 +151,14 @@ struct Server {
 
 impl Server {
     fn start(port: u16) -> Self {
+        Self::start_at(format!("http://127.0.0.1:{port}"))
+    }
+
+    fn start_at(base: String) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_rpmfl"))
             .arg("mcp")
             .env("XDG_CONFIG_HOME", empty_config_home())
-            .env("RPMFL_BASE_URL", format!("http://127.0.0.1:{port}"))
+            .env("RPMFL_BASE_URL", base)
             .env("RPMFL_SESSION", "dummy-session")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -281,6 +285,16 @@ fn a_rejected_session_is_an_auth_error_and_nothing_is_sent_but_the_read() {
     for (request, _) in stub.seen() {
         assert!(request.starts_with("GET /oportal/api/"), "{request}");
     }
+}
+
+/// The host comes from the environment or the config, and the session goes to it.
+#[test]
+fn a_tool_refuses_a_portal_host_off_https() {
+    let mut server = Server::start_at("http://portal.example".into());
+    let result = server.call("rpm_summary", json!({}));
+    assert_eq!(result["isError"], true, "{result}");
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert!(text.contains("only https"), "{text}");
 }
 
 /// Expiry is rarely a 401: Rails answers an XHR with HTML, the login page.

@@ -3,6 +3,18 @@
 All notable changes to `rpmfl` are documented here. Newest first. The project follows
 [SemVer](https://semver.org/); until 1.0, minors carry the breaking-change signal.
 
+## 0.3.2 — 2026-11-03
+
+- The portal host must be `https`, or `http` to this machine, before a password or a
+  session goes to it. This covers `base_url`, `$RPMFL_BASE_URL`, a full URL given to
+  `rpmfl api` and a document link. A tool refuses a host off `https` before it reads the
+  keychain.
+- A redirect that leaves `https` is an error.
+- A network failure names the portal's origin, not the whole URL, and says why a redirect
+  was refused.
+- CI: the workflow's token is read-only at the top level.
+- cli-common v0.24.0, up from v0.23.0.
+
 ## 0.3.1 — 2026-11-03
 
 - README and SECURITY.md say plainly what the memory-only session means: Claude starts a

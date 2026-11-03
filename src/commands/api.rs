@@ -4,6 +4,7 @@
 //! quickest way to check whether the portal's JSON has drifted.
 
 use clap::Args;
+use pk_cli_core::transport::require_secure_url;
 use pk_cli_core::{output, CliError};
 
 use super::Ctx;
@@ -19,6 +20,11 @@ pub struct ApiArgs {
 }
 
 pub fn run(ctx: &Ctx, args: &ApiArgs) -> Result<(), CliError> {
+    // A full URL replaces the portal host. Any https host may be named, since the
+    // user chose it. This runs before the keychain, so a refusal raises no dialog.
+    if args.path.starts_with("http://") {
+        require_secure_url(&args.path)?;
+    }
     let mut query = Vec::new();
     for pair in &args.query {
         let (k, v) = pair

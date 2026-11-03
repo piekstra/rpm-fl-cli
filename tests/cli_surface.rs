@@ -200,3 +200,13 @@ fn no_color_in_the_environment_never_fails_a_command() {
             .success();
     }
 }
+
+/// A full URL replaces the portal host, so plain http is refused, before any keychain read.
+#[test]
+fn api_refuses_a_url_off_https() {
+    rpmfl()
+        .args(["api", "http://portal.example/oportal/api/x"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("only https"));
+}
