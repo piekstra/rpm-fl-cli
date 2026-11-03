@@ -30,6 +30,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use pk_cli_core::transport::{require_secure_url, same_host_redirects, secure_redirects};
 use pk_cli_core::CliError;
 use pk_cli_secrets::{CredentialStore, Secret};
 use reqwest::cookie::CookieStore;
@@ -84,6 +85,7 @@ pub enum LoginOutcome {
 /// An owner-portal session.
 pub struct Portal {
     http: reqwest::blocking::Client,
+    timeout: Duration,
     jar: Arc<reqwest::cookie::Jar>,
     base: String,
     /// Keychain write-back for a rotated session cookie. Rails re-issues
@@ -107,22 +109,17 @@ impl Portal {
     /// explicit per-request budget (`--timeout` / the `timeout_secs` config
     /// key; [`Config::timeout`] resolves the default).
     pub fn new(base: impl Into<String>, timeout: Duration) -> Result<Self, CliError> {
+        let base = base.into();
+        // The host comes from the config or the environment, and the password and
+        // the session go to it.
+        require_secure_url(&base)?;
         let jar = Arc::new(reqwest::cookie::Jar::default());
-        let http = reqwest::blocking::Client::builder()
-            .user_agent(UA)
-            // Total request budget plus an explicit connect budget, so a
-            // stalled TLS handshake fails fast instead of hanging the CLI.
-            // The connect budget never exceeds the total, so a small
-            // `--timeout` really does bound the whole request.
-            .timeout(timeout)
-            .connect_timeout(Duration::from_secs(15).min(timeout))
-            .cookie_provider(jar.clone())
-            .build()
-            .map_err(|e| CliError::Other(format!("failed to build HTTP client: {e}")))?;
+        let http = http_client(&jar, timeout, secure_redirects())?;
         Ok(Portal {
             http,
+            timeout,
             jar,
-            base: base.into(),
+            base,
             sync: None,
             verbose: false,
             quiet: false,
@@ -186,7 +183,7 @@ impl Portal {
     }
 
     fn url(&self, path: &str) -> String {
-        if path.starts_with("http://") || path.starts_with("https://") {
+        if is_full_url(path) {
             path.to_string()
         } else if path.starts_with('/') {
             format!("{}{}", self.base.trim_end_matches('/'), path)
@@ -240,11 +237,16 @@ impl Portal {
     /// Fetch a binary document. Attachment URLs are pre-signed S3 links, so
     /// they carry their own auth and must not get the portal's cookies.
     pub fn download(&self, url: &str) -> Result<Vec<u8>, CliError> {
+        // The link is in the portal's answer, so a refusal is the portal's doing.
+        require_secure_url(url).map_err(|e| match e {
+            CliError::Usage(message) => CliError::Upstream(message),
+            other => other,
+        })?;
         let resp = self
             .http
             .get(url)
             .send()
-            .map_err(|e| CliError::Upstream(format!("download failed: {e}")))?;
+            .map_err(|e| upstream("download failed", e))?;
         let status = resp.status();
         if !status.is_success() {
             return Err(CliError::Upstream(format!(
@@ -254,7 +256,7 @@ impl Portal {
         }
         resp.bytes()
             .map(|b| b.to_vec())
-            .map_err(|e| CliError::Upstream(format!("reading download body: {e}")))
+            .map_err(|e| upstream("reading download body", e))
     }
 
     // ---- Authentication ----------------------------------------------------
@@ -269,23 +271,26 @@ impl Portal {
                 "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             )
             .send()
-            .map_err(|e| CliError::Upstream(format!("GET {path} failed: {e}")))?;
+            .map_err(|e| upstream(&format!("GET {path} failed"), e))?;
         let url = resp.url().to_string();
         let html = resp
             .text()
-            .map_err(|e| CliError::Upstream(format!("reading {path}: {e}")))?;
+            .map_err(|e| upstream(&format!("reading {path}"), e))?;
         Ok((url, html))
     }
 
     /// POST a form, following redirects, returning (final URL, body).
+    ///
+    /// A form carries the password or a code, and reqwest re-sends a body on a 307 or
+    /// 308 to whatever host it names, so this client stays on the portal's host. Its
+    /// own client, built here, because only signing in needs one.
     fn post_form(
         &self,
         path: &str,
         referer: &str,
         fields: &[(&str, String)],
     ) -> Result<(String, String), CliError> {
-        let resp = self
-            .http
+        let resp = http_client(&self.jar, self.timeout, same_host_redirects())?
             .post(self.url(path))
             .header("Origin", self.base.trim_end_matches('/'))
             .header("Referer", self.url(referer))
@@ -295,11 +300,11 @@ impl Portal {
             )
             .form(fields)
             .send()
-            .map_err(|e| CliError::Upstream(format!("POST {path} failed: {e}")))?;
+            .map_err(|e| upstream(&format!("POST {path} failed"), e))?;
         let url = resp.url().to_string();
         let body = resp
             .text()
-            .map_err(|e| CliError::Upstream(format!("reading {path}: {e}")))?;
+            .map_err(|e| upstream(&format!("reading {path}"), e))?;
         Ok((url, body))
     }
 
@@ -383,7 +388,7 @@ impl Portal {
                 ("dummy_value", "not_used"),
             ])
             .send()
-            .map_err(|e| CliError::Upstream(format!("requesting a verification code: {e}")))?;
+            .map_err(|e| upstream("requesting a verification code", e))?;
 
         let status = resp.status();
         let body = resp.text().unwrap_or_default();
@@ -473,7 +478,7 @@ impl Portal {
         let started = Instant::now();
         let note = format!("waiting on the portal (GET {path})");
         let resp = diag::with_stall_note(self.quiet, diag::PORTAL_STALL, &note, || req.send())
-            .map_err(|e| CliError::Upstream(format!("request to {path} failed: {e}")))?;
+            .map_err(|e| upstream(&format!("request to {path} failed"), e))?;
         if self.verbose {
             eprintln!(
                 "rpmfl: GET {path} -> HTTP {} in {:.2}s",
@@ -512,7 +517,7 @@ impl Portal {
         }
         let text = resp
             .text()
-            .map_err(|e| CliError::Upstream(format!("reading response body: {e}")))?;
+            .map_err(|e| upstream("reading response body", e))?;
         if !status.is_success() {
             return Err(CliError::Upstream(format!(
                 "portal HTTP {} for {path}{}",
@@ -729,6 +734,38 @@ fn body_hint(text: &str) -> String {
     format!(" — {}", trimmed.chars().take(120).collect::<String>())
 }
 
+/// A client on the portal's jar. The budgets bound the whole request, plus an explicit
+/// connect budget, so a stalled TLS handshake fails fast instead of hanging the CLI. The
+/// connect budget never exceeds the total, so a small `--timeout` really does bound it.
+fn http_client(
+    jar: &Arc<reqwest::cookie::Jar>,
+    timeout: Duration,
+    redirects: reqwest::redirect::Policy,
+) -> Result<reqwest::blocking::Client, CliError> {
+    reqwest::blocking::Client::builder()
+        .user_agent(UA)
+        .timeout(timeout)
+        .connect_timeout(Duration::from_secs(15).min(timeout))
+        .cookie_provider(jar.clone())
+        .redirect(redirects)
+        .build()
+        .map_err(|e| CliError::Other(format!("failed to build HTTP client: {e}")))
+}
+
+/// Whether a request's path is a full URL, which replaces the portal host.
+pub fn is_full_url(path: &str) -> bool {
+    path.starts_with("http://") || path.starts_with("https://")
+}
+
+/// A transport failure in cli-common's wording: the origin and not the whole URL,
+/// whose path or query can carry an account id, plus a refused redirect's reason.
+fn upstream(context: &str, e: reqwest::Error) -> CliError {
+    match CliError::from(e) {
+        CliError::Upstream(message) => CliError::Upstream(format!("{context}: {message}")),
+        other => other,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -866,6 +903,117 @@ mod tests {
         assert_eq!(body_hint("plain text"), " — plain text");
         // " — " plus 120 truncated chars.
         assert_eq!(body_hint(&"x".repeat(200)).chars().count(), 123);
+    }
+
+    /// Answers requests on 127.0.0.1 with `responses`, one each, in order.
+    fn answering(responses: Vec<String>) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for response in responses {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    let mut buf = [0u8; 4096];
+                    let _ = std::io::Read::read(&mut stream, &mut buf);
+                    let _ = std::io::Write::write_all(&mut stream, response.as_bytes());
+                }
+            }
+        });
+        format!("http://127.0.0.1:{port}")
+    }
+
+    fn redirect(status: &str, location: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\nLocation: {location}\r\n\
+             Content-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+    }
+
+    fn redirecting_to(location: &str) -> String {
+        answering(vec![redirect("302 Found", location)])
+    }
+
+    #[test]
+    fn a_form_is_not_sent_on_to_another_host() {
+        let other = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        other.set_nonblocking(true).unwrap();
+        let elsewhere = format!("http://{}/steal", other.local_addr().unwrap());
+        let base = answering(vec![redirect("307 Temporary Redirect", &elsewhere)]);
+        let portal = Portal::new(base, Duration::from_secs(5)).unwrap();
+        let e = portal
+            .post_form(
+                "/users/log_in",
+                "/users/log_in",
+                &[("password", "dummy-password".into())],
+            )
+            .unwrap_err();
+        let CliError::Upstream(message) = e else {
+            panic!("{e}");
+        };
+        assert!(message.contains("another host"), "{message}");
+        assert_eq!(
+            other.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "the other host was contacted"
+        );
+    }
+
+    #[test]
+    fn a_form_follows_a_redirect_on_the_portal_host() {
+        let base = answering(vec![
+            redirect("302 Found", "/oportal"),
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_string(),
+        ]);
+        let portal = Portal::new(base, Duration::from_secs(5)).unwrap();
+        let (url, body) = portal
+            .post_form(
+                "/users/log_in",
+                "/users/log_in",
+                &[("password", "dummy-password".into())],
+            )
+            .unwrap();
+        assert!(url.ends_with("/oportal"), "{url}");
+        assert_eq!(body, "ok");
+    }
+
+    #[test]
+    fn a_host_off_https_is_refused_before_the_keychain() {
+        let cfg = Config {
+            base_url: Some("http://portal.example".into()),
+            ..Config::default()
+        };
+        let creds = CredentialStore::new("piekstra.rpmfl.test-no-such-item");
+        let e = Portal::from_cached_session(&cfg, &creds).err().unwrap();
+        assert!(matches!(e, CliError::Usage(_)), "{e}");
+    }
+
+    #[test]
+    fn a_portal_host_off_https_is_refused() {
+        let timeout = Duration::from_secs(1);
+        let e = Portal::new("http://portal.example", timeout).err().unwrap();
+        assert!(matches!(e, CliError::Usage(_)), "{e}");
+        assert!(Portal::new("https://portal.example", timeout).is_ok());
+        assert!(Portal::new("http://127.0.0.1:1", timeout).is_ok());
+    }
+
+    #[test]
+    fn a_redirect_off_https_is_refused_and_the_error_prints_no_url_past_the_origin() {
+        let base = redirecting_to("http://portal.example/next");
+        let portal = Portal::new(base, Duration::from_secs(5)).unwrap();
+        let e = portal
+            .get("/oportal/api/x", &[("account", "dummy-account".into())])
+            .unwrap_err();
+        let CliError::Upstream(message) = e else {
+            panic!("{e}");
+        };
+        assert!(message.contains("leaves https"), "{message}");
+        assert!(!message.contains("dummy-account"), "{message}");
+    }
+
+    #[test]
+    fn a_download_link_off_https_is_an_upstream_error_and_sends_nothing() {
+        let portal = Portal::new("https://portal.example", Duration::from_secs(1)).unwrap();
+        let e = portal.download("http://files.example/doc").unwrap_err();
+        assert!(matches!(e, CliError::Upstream(_)), "{e}");
     }
 
     #[test]

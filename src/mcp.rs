@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 
 use pk_cli_config::ConfigStore;
+use pk_cli_core::transport::require_secure_url;
 use pk_cli_core::{dates, resolve, CliError};
 use pk_cli_mcp::{
     parse_args, ListArgs, Page, PageRequest, Server, ToolDef, ToolError, ToolOutput, Toolset,
@@ -128,15 +129,13 @@ impl LivePortal {
 
 impl Reads for LivePortal {
     fn get(&self, path: &'static str, query: &[(&str, String)]) -> Result<Value, CliError> {
-        let mut cfg: Config = ConfigStore::new("rpmfl").load().map_err(|e| match e {
-            // No tool argument can fix a bad config file.
-            CliError::Usage(message) => CliError::Other(message),
-            other => other,
-        })?;
+        let mut cfg: Config = ConfigStore::new("rpmfl").load().map_err(bad_config)?;
         if let Some(secs) = self.timeout {
             cfg.timeout_secs = Some(secs);
         }
         let base = cfg.base_url().map_err(no_host)?;
+        // Before the keychain, so a host off https gets no session and raises no dialog.
+        require_secure_url(&base).map_err(bad_config)?;
         // The keychain may wait on an approval dialog, and the portal on the
         // network, so the lock is held for neither.
         let creds = CredentialStore::for_binary("rpmfl");
@@ -151,6 +150,14 @@ impl Reads for LivePortal {
             self.lock().record(&stored, &send, portal.session_cookie());
         }
         read
+    }
+}
+
+/// A command's usage error, for a bad config file or host. No tool argument can fix it.
+fn bad_config(e: CliError) -> CliError {
+    match e {
+        CliError::Usage(message) => CliError::Other(message),
+        other => other,
     }
 }
 

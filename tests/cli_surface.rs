@@ -200,3 +200,28 @@ fn no_color_in_the_environment_never_fails_a_command() {
             .success();
     }
 }
+
+/// A full URL replaces the portal host, so plain http is refused, before any keychain read.
+#[test]
+fn api_refuses_a_url_off_https() {
+    rpmfl()
+        .args(["api", "http://portal.example/oportal/api/x"])
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("only https"));
+}
+
+/// Signing in reads and can overwrite the stored password, so a host off https stops it first.
+#[test]
+fn auth_login_refuses_a_host_off_https_before_the_keychain() {
+    let config_home = std::env::temp_dir().join(format!("rpmfl-surface-{}", std::process::id()));
+    std::fs::create_dir_all(&config_home).unwrap();
+    rpmfl()
+        .args(["auth", "login", "--non-interactive"])
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("RPMFL_BASE_URL", "http://portal.example")
+        .env("RPMFL_USERNAME", "dummy@example.com")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("only https"));
+}

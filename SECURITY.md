@@ -79,6 +79,9 @@ those. Cloudflare is your own account's, and we run no shared service.
 
 ## What this tool does not do
 
+- It sends no credential over plain `http`, except to this machine: the portal host, a
+  full URL given to `rpmfl api`, a document link and every redirect must be `https`. The sign-in forms, which carry the
+  password or a code, follow a redirect only on the portal's host.
 - It never mutates the portal — no payments, approvals, or profile changes, through a
   command or a tool.
 - It talks only to the configured portal host and the S3 links that host
