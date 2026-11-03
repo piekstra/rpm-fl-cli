@@ -45,9 +45,10 @@ two-factor code, or creates or changes a keychain item, so a background server c
 lock your account by retrying a stale password or send you text messages, however often
 it restarts. The portal may rotate the session cookie on a response; the server keeps
 the new copy in memory until the stored session changes, and never writes it to the
-keychain, since a write from a background server could block on a dialog. So a restart
-falls back to the stored cookie, and if that has gone stale, `rpmfl auth login` is needed
-even though the session was in use. A missing or expired session is an error asking the user to run `rpmfl auth login` in a
+keychain, since a write from a background server could block on a dialog. Only `rpmfl`
+commands advance the stored session, and every new server starts from it, which on stdio
+means each launch or session of the client. So if it has gone stale, `rpmfl auth login` is
+needed even though the session was in use. A missing or expired session is an error asking the user to run `rpmfl auth login` in a
 terminal; while `$RPMFL_SESSION` is set, the keychain is not read, so the error asks the
 user to replace or unset the variable instead. The Claude Desktop extension (`.mcpb`)
 takes no settings and so holds no credential of its own; on macOS its bundled binary

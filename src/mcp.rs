@@ -8,11 +8,12 @@
 //! person) and never writes the keychain: a lapsed session is an auth error naming
 //! `rpmfl auth login`. The portal may rotate the session cookie on any response;
 //! the server keeps the newest copy in memory, for as long as the keychain still
-//! holds the session it came from, so a new sign-in takes effect at once. A restart
-//! loses that copy and falls back to the stored one, which may have gone stale:
-//! then `rpmfl auth login` is needed even though the session was in use. A write
-//! back from a background server could block on a keychain dialog, so that is the
-//! trade made here.
+//! holds the session it came from, so a new sign-in takes effect at once. Only
+//! `rpmfl` commands advance the stored one, and every new server starts from it,
+//! which on stdio means each launch or session of the client. If it has gone stale,
+//! `rpmfl auth login` is needed even though the session was in use. A write back
+//! from a background server could block on a keychain dialog, so that is the trade
+//! made here.
 //!
 //! The commands' mappers are best-effort, for a person who can see the raw
 //! payload. A tool's answer goes to a model as fact, so an answer the portal did
