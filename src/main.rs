@@ -378,6 +378,8 @@ fn login(
             "no portal email configured — run `rpmfl config set username <you@example.com>`".into(),
         )
     })?;
+    // Before the keychain: this reads, and can overwrite, the stored password.
+    pk_cli_core::transport::require_secure_url(&cfg.base_url()?)?;
 
     // A code supplied on the command line belongs to the login that requested
     // it, so resume that parked session rather than starting a fresh one.

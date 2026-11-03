@@ -9,7 +9,9 @@ All notable changes to `rpmfl` are documented here. Newest first. The project fo
   session goes to it. This covers `base_url`, `$RPMFL_BASE_URL`, a full URL given to
   `rpmfl api` and a document link. A tool refuses a host off `https` before it reads the
   keychain.
-- A redirect that leaves `https` is an error.
+- A redirect that leaves `https` is an error, and the sign-in forms, which carry the
+  password or a code, follow a redirect only on the portal's host. `rpmfl auth login`
+  refuses a host off `https` before it reads or writes the stored password.
 - A network failure names the portal's origin, not the whole URL, and says why a redirect
   was refused.
 - CI: the workflow's token is read-only at the top level.

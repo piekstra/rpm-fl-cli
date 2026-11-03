@@ -8,10 +8,12 @@ use pk_cli_core::transport::require_secure_url;
 use pk_cli_core::{output, CliError};
 
 use super::Ctx;
+use crate::client::is_full_url;
 
 #[derive(Args, Debug)]
 pub struct ApiArgs {
-    /// Path under the portal host, e.g. `/oportal/api/owner_properties`.
+    /// Path under the portal host, e.g. `/oportal/api/owner_properties`. A full
+    /// `https://` URL replaces the host; `http://` is refused except to this machine.
     pub path: String,
 
     /// Repeatable query parameter, `key=value`.
@@ -22,7 +24,7 @@ pub struct ApiArgs {
 pub fn run(ctx: &Ctx, args: &ApiArgs) -> Result<(), CliError> {
     // A full URL replaces the portal host. Any https host may be named, since the
     // user chose it. This runs before the keychain, so a refusal raises no dialog.
-    if args.path.starts_with("http://") {
+    if is_full_url(&args.path) {
         require_secure_url(&args.path)?;
     }
     let mut query = Vec::new();

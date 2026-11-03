@@ -30,7 +30,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use pk_cli_core::transport::{require_secure_url, secure_redirects};
+use pk_cli_core::transport::{require_secure_url, same_host_redirects, secure_redirects};
 use pk_cli_core::CliError;
 use pk_cli_secrets::{CredentialStore, Secret};
 use reqwest::cookie::CookieStore;
@@ -85,6 +85,7 @@ pub enum LoginOutcome {
 /// An owner-portal session.
 pub struct Portal {
     http: reqwest::blocking::Client,
+    timeout: Duration,
     jar: Arc<reqwest::cookie::Jar>,
     base: String,
     /// Keychain write-back for a rotated session cookie. Rails re-issues
@@ -113,20 +114,10 @@ impl Portal {
         // the session go to it.
         require_secure_url(&base)?;
         let jar = Arc::new(reqwest::cookie::Jar::default());
-        let http = reqwest::blocking::Client::builder()
-            .user_agent(UA)
-            // Total request budget plus an explicit connect budget, so a
-            // stalled TLS handshake fails fast instead of hanging the CLI.
-            // The connect budget never exceeds the total, so a small
-            // `--timeout` really does bound the whole request.
-            .timeout(timeout)
-            .connect_timeout(Duration::from_secs(15).min(timeout))
-            .cookie_provider(jar.clone())
-            .redirect(secure_redirects())
-            .build()
-            .map_err(|e| CliError::Other(format!("failed to build HTTP client: {e}")))?;
+        let http = http_client(&jar, timeout, secure_redirects())?;
         Ok(Portal {
             http,
+            timeout,
             jar,
             base,
             sync: None,
@@ -192,7 +183,7 @@ impl Portal {
     }
 
     fn url(&self, path: &str) -> String {
-        if path.starts_with("http://") || path.starts_with("https://") {
+        if is_full_url(path) {
             path.to_string()
         } else if path.starts_with('/') {
             format!("{}{}", self.base.trim_end_matches('/'), path)
@@ -289,14 +280,17 @@ impl Portal {
     }
 
     /// POST a form, following redirects, returning (final URL, body).
+    ///
+    /// A form carries the password or a code, and reqwest re-sends a body on a 307 or
+    /// 308 to whatever host it names, so this client stays on the portal's host. Its
+    /// own client, built here, because only signing in needs one.
     fn post_form(
         &self,
         path: &str,
         referer: &str,
         fields: &[(&str, String)],
     ) -> Result<(String, String), CliError> {
-        let resp = self
-            .http
+        let resp = http_client(&self.jar, self.timeout, same_host_redirects())?
             .post(self.url(path))
             .header("Origin", self.base.trim_end_matches('/'))
             .header("Referer", self.url(referer))
@@ -740,6 +734,29 @@ fn body_hint(text: &str) -> String {
     format!(" — {}", trimmed.chars().take(120).collect::<String>())
 }
 
+/// A client on the portal's jar. The budgets bound the whole request, plus an explicit
+/// connect budget, so a stalled TLS handshake fails fast instead of hanging the CLI. The
+/// connect budget never exceeds the total, so a small `--timeout` really does bound it.
+fn http_client(
+    jar: &Arc<reqwest::cookie::Jar>,
+    timeout: Duration,
+    redirects: reqwest::redirect::Policy,
+) -> Result<reqwest::blocking::Client, CliError> {
+    reqwest::blocking::Client::builder()
+        .user_agent(UA)
+        .timeout(timeout)
+        .connect_timeout(Duration::from_secs(15).min(timeout))
+        .cookie_provider(jar.clone())
+        .redirect(redirects)
+        .build()
+        .map_err(|e| CliError::Other(format!("failed to build HTTP client: {e}")))
+}
+
+/// Whether a request's path is a full URL, which replaces the portal host.
+pub fn is_full_url(path: &str) -> bool {
+    path.starts_with("http://") || path.starts_with("https://")
+}
+
 /// A transport failure in cli-common's wording: the origin and not the whole URL,
 /// whose path or query can carry an account id, plus a refused redirect's reason.
 fn upstream(context: &str, e: reqwest::Error) -> CliError {
@@ -888,25 +905,85 @@ mod tests {
         assert_eq!(body_hint(&"x".repeat(200)).chars().count(), 123);
     }
 
-    /// Answers one request on 127.0.0.1 with a redirect to `location`.
-    fn redirecting_to(location: &'static str) -> String {
+    /// Answers requests on 127.0.0.1 with `responses`, one each, in order.
+    fn answering(responses: Vec<String>) -> String {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
         let port = listener.local_addr().unwrap().port();
         std::thread::spawn(move || {
-            if let Ok((mut stream, _)) = listener.accept() {
-                let mut buf = [0u8; 4096];
-                let _ = std::io::Read::read(&mut stream, &mut buf);
-                let _ = std::io::Write::write_all(
-                    &mut stream,
-                    format!(
-                        "HTTP/1.1 302 Found\r\nLocation: {location}\r\n\
-                         Content-Length: 0\r\nConnection: close\r\n\r\n"
-                    )
-                    .as_bytes(),
-                );
+            for response in responses {
+                if let Ok((mut stream, _)) = listener.accept() {
+                    let mut buf = [0u8; 4096];
+                    let _ = std::io::Read::read(&mut stream, &mut buf);
+                    let _ = std::io::Write::write_all(&mut stream, response.as_bytes());
+                }
             }
         });
         format!("http://127.0.0.1:{port}")
+    }
+
+    fn redirect(status: &str, location: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\nLocation: {location}\r\n\
+             Content-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+    }
+
+    fn redirecting_to(location: &str) -> String {
+        answering(vec![redirect("302 Found", location)])
+    }
+
+    #[test]
+    fn a_form_is_not_sent_on_to_another_host() {
+        let other = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        other.set_nonblocking(true).unwrap();
+        let elsewhere = format!("http://{}/steal", other.local_addr().unwrap());
+        let base = answering(vec![redirect("307 Temporary Redirect", &elsewhere)]);
+        let portal = Portal::new(base, Duration::from_secs(5)).unwrap();
+        let e = portal
+            .post_form(
+                "/users/log_in",
+                "/users/log_in",
+                &[("password", "dummy-password".into())],
+            )
+            .unwrap_err();
+        let CliError::Upstream(message) = e else {
+            panic!("{e}");
+        };
+        assert!(message.contains("another host"), "{message}");
+        assert_eq!(
+            other.accept().unwrap_err().kind(),
+            std::io::ErrorKind::WouldBlock,
+            "the other host was contacted"
+        );
+    }
+
+    #[test]
+    fn a_form_follows_a_redirect_on_the_portal_host() {
+        let base = answering(vec![
+            redirect("302 Found", "/oportal"),
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_string(),
+        ]);
+        let portal = Portal::new(base, Duration::from_secs(5)).unwrap();
+        let (url, body) = portal
+            .post_form(
+                "/users/log_in",
+                "/users/log_in",
+                &[("password", "dummy-password".into())],
+            )
+            .unwrap();
+        assert!(url.ends_with("/oportal"), "{url}");
+        assert_eq!(body, "ok");
+    }
+
+    #[test]
+    fn a_host_off_https_is_refused_before_the_keychain() {
+        let cfg = Config {
+            base_url: Some("http://portal.example".into()),
+            ..Config::default()
+        };
+        let creds = CredentialStore::new("piekstra.rpmfl.test-no-such-item");
+        let e = Portal::from_cached_session(&cfg, &creds).err().unwrap();
+        assert!(matches!(e, CliError::Usage(_)), "{e}");
     }
 
     #[test]
