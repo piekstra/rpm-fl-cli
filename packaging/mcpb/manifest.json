@@ -1,0 +1,81 @@
+{
+  "manifest_version": "0.3",
+  "name": "rpmfl",
+  "display_name": "Real Property Management owner portal (rpmfl)",
+  "version": "0.3.0",
+  "description": "Read-only access to your own Real Property Management owner portal: portfolio totals, properties, ledger, rent and shared documents, through the open-source rpmfl CLI.",
+  "long_description": "Ask Claude about the rentals you own through a Real Property Management office on AppFolio: how a period went, occupancy and lease end dates, what came in and went out, whether rent was paid, and which documents the manager has shared. Five read-only tools, rpm_summary, rpm_properties, rpm_transactions, rpm_rent and rpm_documents; nothing can approve an estimate, sign a form, make a contribution or change anything at the portal. The extension asks for no password: first install the rpmfl CLI, set your portal's URL with `rpmfl config set base_url`, and run `rpmfl auth login` in a terminal. That caches a session in your OS keychain, and the bundled rpmfl reads it from there. When the session expires, run `rpmfl auth login` again. On macOS the first call asks for keychain access; choose Always Allow. What the tools return (totals, property addresses, lease dates, ledger entries with tenant and vendor names, rent charges, document names) goes to Claude as part of your conversation. Unofficial; not affiliated with Real Property Management or AppFolio.",
+  "author": {
+    "name": "piekstra",
+    "url": "https://github.com/piekstra"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/piekstra/rpm-fl-cli"
+  },
+  "homepage": "https://github.com/piekstra/rpm-fl-cli",
+  "documentation": "https://github.com/piekstra/rpm-fl-cli#use-with-claude",
+  "support": "https://github.com/piekstra/rpm-fl-cli/issues",
+  "license": "MIT OR Apache-2.0",
+  "keywords": [
+    "rental-property",
+    "appfolio",
+    "property-management",
+    "owner-portal",
+    "read-only"
+  ],
+  "server": {
+    "type": "binary",
+    "entry_point": "server/rpmfl",
+    "mcp_config": {
+      "command": "${__dirname}/server/rpmfl",
+      "args": [
+        "mcp"
+      ],
+      "platform_overrides": {
+        "win32": {
+          "command": "${__dirname}/server/rpmfl.exe",
+          "args": [
+            "mcp"
+          ]
+        },
+        "linux": {
+          "command": "${__dirname}/server/linux/rpmfl",
+          "args": [
+            "mcp"
+          ]
+        }
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "rpm_summary",
+      "description": "Cash in and out, disbursements and unpaid bills over a period, and what is waiting on you."
+    },
+    {
+      "name": "rpm_properties",
+      "description": "The properties you own through this manager: occupancy, rent and lease end dates."
+    },
+    {
+      "name": "rpm_transactions",
+      "description": "Entries on your owner ledger over a period."
+    },
+    {
+      "name": "rpm_rent",
+      "description": "Rent charged to your tenants, and what is still owed."
+    },
+    {
+      "name": "rpm_documents",
+      "description": "What the manager has shared with you, by name."
+    }
+  ],
+  "tools_generated": false,
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32",
+      "linux"
+    ]
+  }
+}

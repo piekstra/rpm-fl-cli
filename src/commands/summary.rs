@@ -47,7 +47,7 @@ pub fn run(ctx: &Ctx, range: &RangeArgs) -> Result<(), CliError> {
 }
 
 /// Sum `totalAmount` across rows of a given balance `type`.
-fn total_of(payload: &Value, kind: &str) -> f64 {
+pub fn total_of(payload: &Value, kind: &str) -> f64 {
     let sum: f64 = payload
         .as_array()
         .map(|rows| {

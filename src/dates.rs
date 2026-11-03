@@ -54,6 +54,12 @@ impl RangeArgs {
         Ok(dates::fmt_mm_slash_dd_yyyy(until))
     }
 
+    /// Both bounds as ISO dates, for telling a caller which period was read.
+    pub fn resolve_iso(&self) -> Result<(String, String), CliError> {
+        let (since, until) = self.civil_bounds()?;
+        Ok((dates::fmt_iso(since), dates::fmt_iso(until)))
+    }
+
     /// Both bounds as civil dates, defaulted and validated.
     fn civil_bounds(&self) -> Result<(dates::Civil, dates::Civil), CliError> {
         let today = dates::today();

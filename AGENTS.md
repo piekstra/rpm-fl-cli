@@ -8,8 +8,9 @@ Guidance for AI coding agents (and humans) working in this repo. Tool-agnostic;
 `rpmfl` — a Rust CLI for the AppFolio **owner portal** that Real Property
 Management franchises hand to rental-property owners. A thin, portal-specific
 layer over the shared [`cli-common`](https://github.com/piekstra/cli-common)
-`pk-cli-*` crates (auth, http, config, secrets, self-update). This repo owns
-only the portal client, the commands, and their DTOs.
+`pk-cli-*` crates (auth, http, config, secrets, self-update, MCP), pinned to
+**v0.21.0**. This repo owns
+only the portal client, the commands, their DTOs, and the tools `rpmfl mcp` serves.
 
 There is no official API. Everything targets the undocumented JSON endpoints
 the portal's own front end calls, mapped by watching its XHR traffic and
@@ -34,7 +35,12 @@ Run `make verify` before considering a change done — it's exactly what CI runs
   explains the auth model and why the device-trust token isn't usable here.
 - `src/commands/*.rs` — one module per command group; `misc.rs` holds the
   small single-endpoint reads. Each renders a human table and a `--json` DTO.
-- `src/config.rs` — non-secret config; every secret is keychain-only.
+- `src/config.rs` — non-secret config; secrets live in the keychain (`rpmfl mcp` also
+  reads `$RPMFL_SESSION` first).
+- `src/mcp.rs` — `rpmfl mcp`: read-only tools over the `Reads` seam, which offers GETs
+  to fixed paths alone. Its module doc says why it never signs in, never sends the
+  password and never writes the keychain. `tests/mcp_readonly.rs` holds every tool to
+  the read endpoints against a stub portal.
 - `src/dates.rs` — ISO ⇄ the portal's `MM/DD/YYYY`, plus `RangeArgs`.
 - `tests/` — offline surface + contract tests, and `tests/fixtures/` (read its
   README before touching a fixture).

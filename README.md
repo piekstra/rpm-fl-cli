@@ -10,7 +10,7 @@ all from the AppFolio owner portal your property manager gives you. Fast,
 keychain-secured, agent-friendly.
 
 Every command is a **read**. Nothing in this CLI moves money, approves an
-estimate, or changes a setting.
+estimate, or changes a setting. `rpmfl mcp` serves the same reads to Claude.
 
 > Unofficial and not affiliated with AppFolio or Real Property Management.
 > It drives the portal's own undocumented JSON endpoints, which can change
@@ -19,7 +19,7 @@ estimate, or changes a setting.
 ## Install
 
 ```console
-# from source (recent stable Rust; MSRV 1.88)
+# from source (recent stable Rust; MSRV 1.89)
 $ cargo install --git https://github.com/piekstra/rpm-fl-cli --locked
 $ make install        # cargo install --locked --path . --force
 ```
@@ -89,6 +89,7 @@ rpmfl statements [--limit N]                            # published owner packet
 rpmfl approvals [--page N]                              # estimates awaiting your decision
 rpmfl forms                                             # documents needing a signature
 rpmfl api <PATH> [--query k=v]                          # raw portal passthrough
+rpmfl mcp [--http --port N]                             # read-only tools for Claude
 rpmfl auth login|status [--verify]|logout|set-credential # credentials and session
 rpmfl config path|show|set|unset                        # non-secret settings
 rpmfl completions <shell> | rpmfl info | rpmfl self-update
@@ -116,6 +117,69 @@ install` rather than bare `cargo`, so the binary keeps the stable signing
 identity. `--timeout <SECS>` (default 45) bounds a stalled request;
 `rpmfl config set timeout_secs 20` makes a smaller budget stick, which matters
 for tool wrappers with a 60s limit.
+
+## Use with Claude
+
+`rpmfl mcp` serves five read-only tools to Claude over MCP: `rpm_summary`,
+`rpm_properties`, `rpm_transactions`, `rpm_rent` and `rpm_documents`. Nothing can
+approve an estimate, sign a form, make a contribution or change anything at the portal.
+Document results name documents and carry no link and no contents.
+
+**Claude Code.** After `rpmfl auth login`:
+
+```sh
+claude mcp add rpm -- rpmfl mcp
+```
+
+Or install the `rpm-fl-cli` plugin from
+[claude-plugins](https://github.com/piekstra/claude-plugins), which runs the same
+command.
+
+**Claude Desktop.** Download `rpmfl-<version>.mcpb` from the
+[latest release](https://github.com/piekstra/rpm-fl-cli/releases/latest) and open it.
+It asks for nothing: the bundled `rpmfl` reads the session your installed `rpmfl`
+cached. On macOS the bundled binary is a different program to the keychain, so its
+first call raises a keychain prompt for the `piekstra.rpmfl` item; choose **Always
+Allow**, or every call will ask again.
+
+Any other MCP client that launches a local server can run `rpmfl mcp`.
+
+The tools never sign in, never send your password and never ask for a two-factor code.
+When the portal's session expires, they say so, and you run `rpmfl auth login` again.
+They read `$RPMFL_SESSION` first if it is set, then the keychain. A session in that
+variable that has expired must be replaced or unset where it is set, and the server
+restarted, since the keychain is not read while it is set.
+
+**Claude on the web and mobile.** claude.ai reaches tools through a remote connector,
+and your portal session stays on your computer, so `rpmfl` serves the same tools from
+your computer to a connector you deploy into your own Cloudflare account:
+
+```console
+$ rpmfl mcp --new-token            # once: a bearer token, saved in the keychain and printed for the Worker
+$ rpmfl mcp --http --port 8751     # serve on 127.0.0.1 only
+```
+
+The connector, [cli-common's `connector/`](https://github.com/piekstra/cli-common/tree/main/connector#tools-from-your-computer-home-modules),
+reaches that port through a Cloudflare Tunnel in your account; its README walks through
+the tunnel, the VPC service, a launchd agent that keeps the server running, and the
+`HOME_RPM_TOKEN` secret, with the threat model. `--http` binds 127.0.0.1 only, refuses
+to start without the token, refuses any request whose `Host` is not loopback or that
+carries an `Origin`, and serves the read-only tools only. Your portal password and
+session never leave your computer, but tool results do: portfolio totals, property
+addresses, rent and lease dates, ledger entries with tenant and vendor names, rent
+charges and document names pass through Cloudflare and reach Claude
+([`SECURITY.md`](SECURITY.md)). While the computer sleeps, the tools answer that it is
+offline.
+
+After `rpmfl self-update`, restart the server: a running one keeps the old code, and its
+launchd agent restarts it only when it exits. Its start line names the version.
+
+```console
+$ launchctl kickstart -k gui/$(id -u)/com.piekstra.rpmfl-mcp-http
+```
+
+`self-update` does not reach a Claude Desktop extension, which runs its own copy.
+Install the new release's `.mcpb` too.
 
 ## Examples
 

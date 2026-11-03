@@ -134,6 +134,18 @@ endpoints return flat rows. The CLI flattens the former for its table views;
 `download_url` values are **pre-signed S3 links that expire in ~5 minutes**,
 so `rpmfl documents get` fetches immediately rather than printing a link.
 
+## What `rpmfl mcp` reads
+
+The tools use `GET` on `owner_properties`, `owner_transactions`, `owner_income_balances`,
+`owner_expenses_balances`, `unpaid_bills_balances`, `owner_decision_requests`,
+`pdf_forms/actionable_documents`, `tenant_charges` and `shared_documents/`, and nothing
+else. They never send the ledger's `type` filter, which answers HTTP 500 on
+`disbursement`; a tool selects kinds itself. `tenant_charges` takes no paging arguments,
+so `rpm_rent` assumes one answer holds the period; that has not been checked against a
+period of more than the captured eight rows. A tool drops `download_url`, `display_url`
+and ledger `attachments`: a pre-signed link works without a sign-in. Approval and form
+rows are only counted, since no non-empty row has been captured.
+
 ## Non-API pages
 
 `/oportal/statements`, `/oportal/transaction_history`, `/oportal/documents`,
