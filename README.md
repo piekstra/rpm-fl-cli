@@ -146,8 +146,13 @@ Any other MCP client that launches a local server can run `rpmfl mcp`.
 
 The tools never sign in, never send your password and never ask for a two-factor code.
 When the portal's session expires, they say so, and you run `rpmfl auth login` again.
-That can also follow a restart of the server, which keeps a rotated session cookie in
-memory only. They read `$RPMFL_SESSION` first if it is set, then the keychain. A session in that
+Plan on that: the server keeps a rotated session cookie in memory only, Claude starts a
+new server for each launch or session, and each new one starts from the session last
+stored, which only `rpmfl` commands advance. `rpmfl auth status --verify` advances the
+stored session without signing in, as long as it still works. How long the portal lets an
+idle session live has not been measured.
+
+The tools read `$RPMFL_SESSION` first if it is set, then the keychain. A session in that
 variable that has expired must be replaced or unset where it is set, and the server
 restarted, since the keychain is not read while it is set.
 

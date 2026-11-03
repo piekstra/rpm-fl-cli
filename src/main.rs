@@ -23,8 +23,7 @@ use pk_cli_selfupdate::{SelfUpdateArgs, Updater};
 use client::{CodeChannel, LoginOutcome, Portal};
 use commands::{api, bills, documents, misc, properties, summary, transactions, Ctx};
 use config::{
-    Config, DEVICE_TOKEN_ACCOUNT, KEYCHAIN_ACCOUNT, MCP_TOKEN_ACCOUNT, PENDING_SESSION_ACCOUNT,
-    SESSION_ACCOUNT,
+    Config, DEVICE_TOKEN_ACCOUNT, KEYCHAIN_ACCOUNT, PENDING_SESSION_ACCOUNT, SESSION_ACCOUNT,
 };
 use dates::RangeArgs;
 
@@ -334,7 +333,7 @@ fn auth(
                 // So the next server to start cannot reuse it. A running server read
                 // the token at its start and keeps it in memory, and the variable is
                 // beyond this command: the message says what those take.
-                creds.delete(MCP_TOKEN_ACCOUNT)?;
+                creds.delete(pk_cli_mcp::HTTP_TOKEN_ACCOUNT)?;
                 store.clear()?;
                 if !cli.common.quiet {
                     eprintln!(

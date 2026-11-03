@@ -3,6 +3,18 @@
 All notable changes to `rpmfl` are documented here. Newest first. The project follows
 [SemVer](https://semver.org/); until 1.0, minors carry the breaking-change signal.
 
+## 0.3.1 — 2026-11-03
+
+- README and SECURITY.md say plainly what the memory-only session means: Claude starts a
+  new server for each launch or session, and each one starts from the session last stored,
+  which only `rpmfl` commands advance. `rpmfl auth status --verify` advances it without
+  signing in, as long as it still works.
+- `auth logout --forget` removes the `mcp --http` token through the name cli-common writes
+  it under, not a copy of that name.
+- Release workflow: the release action is pinned to a commit.
+- cli-common v0.23.0, up from v0.21.0. A failed keychain call from a tool now reads "the OS
+  keychain could not be used".
+
 ## 0.3.0 — 2026-11-03
 
 - `rpmfl mcp`: five read-only tools for Claude: `rpm_summary`, `rpm_properties`,
