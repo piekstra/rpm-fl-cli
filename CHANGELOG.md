@@ -3,6 +3,11 @@
 All notable changes to `rpmfl` are documented here. Newest first. The project follows
 [SemVer](https://semver.org/); until 1.0, minors carry the breaking-change signal.
 
+## 0.3.4 — 2026-11-04
+
+- The read budget, the offset walk's dedupe and the note for a server on `$RPMFL_MCP_TOKEN` come from cli-common, which took them from this crate.
+- cli-common v0.29.0, up from v0.27.0.
+
 ## 0.3.3 — 2026-11-03
 
 - `rpm_transactions`, `rpm_rent` and `rpm_documents` page by position, so a row that arrives between
