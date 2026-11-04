@@ -584,6 +584,17 @@ fn a_row_posted_during_the_walk_comes_back_once() {
     );
 }
 
+/// Nothing says an id is unique across the ledger's kinds, so only an identical row is a repeat.
+#[test]
+fn two_ledger_rows_that_only_share_an_id_are_two_rows() {
+    let tools = over_answer(
+        TRANSACTIONS,
+        json!([ledger_row(7, "cashIn"), ledger_row(7, "disbursement")]),
+    );
+    let got = ok(&tools, "rpm_transactions", json!({}));
+    assert_eq!(got["returned"], 2, "{got}");
+}
+
 /// A walk that runs out of time asks for a narrower period, and answers in time to say so.
 #[test]
 fn a_walk_past_its_budget_asks_for_a_narrower_period() {
