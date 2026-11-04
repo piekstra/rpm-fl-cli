@@ -24,8 +24,9 @@
 //! sign-in. No tool returns one. Approval and form rows are only counted: no
 //! non-empty one has been captured, so what they hold is unknown.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use pk_cli_config::ConfigStore;
 use pk_cli_core::transport::require_secure_url;
@@ -64,6 +65,9 @@ const DOCUMENTS: &str = "/oportal/api/shared_documents/";
 const PAGE_SIZE: usize = 100;
 /// Most ledger pages one call walks.
 const MAX_PAGES: usize = 50;
+/// How long one call walks the ledger: below `pk_cli_mcp::CALL_LIMIT`, so a slow portal is told to
+/// narrow the period instead of being answered at the limit with nobody told why.
+const WALK_BUDGET: Duration = Duration::from_secs(90);
 
 /// The tools `rpmfl mcp` serves. Nothing here reads the config or the keychain:
 /// a client lists tools before anyone has signed in.
@@ -552,6 +556,7 @@ impl Property {
 pub struct RpmTools<R> {
     server: Server,
     reads: R,
+    walk_budget: Duration,
 }
 
 impl<R: Reads> RpmTools<R> {
@@ -579,7 +584,11 @@ impl<R: Reads> RpmTools<R> {
                  this server",
             );
         }
-        Self { server, reads }
+        Self {
+            server,
+            reads,
+            walk_budget: WALK_BUDGET,
+        }
     }
 
     fn summary(&self, args: Value) -> Result<ToolOutput, ToolError> {
@@ -729,7 +738,22 @@ impl<R: Reads> RpmTools<R> {
 
         let mut items: Vec<(PositionKey, TransactionItem)> = Vec::new();
         let bad = || shape_error("ledger");
+        let too_many = |what: String| {
+            ToolError::usage(format!(
+                "{what}, the most one call reads; narrow since/until"
+            ))
+        };
+        let started = Instant::now();
+        // The portal pages by offset, so a row posted during the walk moves a row into the next
+        // page as well.
+        let mut seen: HashSet<String> = HashSet::new();
         for walked in 0..MAX_PAGES {
+            if walked > 0 && started.elapsed() >= self.walk_budget {
+                return Err(too_many(format!(
+                    "this period took more than {} seconds to read",
+                    self.walk_budget.as_secs()
+                )));
+            }
             let mut query = vec![
                 ("start_on", period.start_on.clone()),
                 ("end_on", period.end_on.clone()),
@@ -757,8 +781,11 @@ impl<R: Reads> RpmTools<R> {
                     }
                 }
                 let date = text(row, "postedOn").ok_or_else(bad)?;
-                let id = scalar(row, "id");
-                let key = PositionKey::new(date.as_str(), id.as_deref().unwrap_or_default());
+                let id = scalar(row, "id").ok_or_else(bad)?;
+                if !seen.insert(id.clone()) {
+                    continue;
+                }
+                let key = PositionKey::new(date.as_str(), &id);
                 items.push((
                     key,
                     TransactionItem {
@@ -768,7 +795,7 @@ impl<R: Reads> RpmTools<R> {
                         party: text(row, "partyName"),
                         property: text(row, "propertyDisplayName"),
                         description: text(row, "description"),
-                        id: id.filter(|_| detailed),
+                        id: detailed.then_some(id),
                     },
                 ));
             }
@@ -776,9 +803,8 @@ impl<R: Reads> RpmTools<R> {
                 break;
             }
             if walked + 1 == MAX_PAGES {
-                return Err(ToolError::usage(format!(
-                    "this period holds more than {} ledger entries, the most one call reads; \
-                     narrow since/until",
+                return Err(too_many(format!(
+                    "this period holds more than {} ledger entries",
                     MAX_PAGES * PAGE_SIZE
                 )));
             }
@@ -831,8 +857,8 @@ impl<R: Reads> RpmTools<R> {
             let balance = number(row, "balance").ok_or_else(bad)?;
             outstanding += balance;
             let date = text(row, "occurredOn").ok_or_else(bad)?;
-            let id = scalar(row, "id");
-            let key = PositionKey::new(date.as_str(), id.as_deref().unwrap_or_default());
+            let id = scalar(row, "id").ok_or_else(bad)?;
+            let key = PositionKey::new(date.as_str(), &id);
             items.push((
                 key,
                 RentItem {
@@ -840,7 +866,7 @@ impl<R: Reads> RpmTools<R> {
                     amount: dollars(number(row, "amount").ok_or_else(bad)?),
                     balance: dollars(balance),
                     property: names.get(property.as_str()).map(|n| n.to_string()),
-                    id: id.filter(|_| detailed),
+                    id: detailed.then_some(id),
                 },
             ));
         }
@@ -885,11 +911,11 @@ impl<R: Reads> RpmTools<R> {
                         continue;
                     }
                     let shared = shared_date(row);
-                    let id = scalar(row, "id");
+                    let id = scalar(row, "id").ok_or_else(bad)?;
                     // An id is only unique within its group.
                     let key = PositionKey::new(
                         shared.as_deref().unwrap_or_default(),
-                        &format!("{category}:{}", id.as_deref().unwrap_or_default()),
+                        &format!("{category}:{id}"),
                     );
                     items.push((
                         key,
@@ -898,7 +924,7 @@ impl<R: Reads> RpmTools<R> {
                             category: category.into(),
                             shared,
                             folder: text(row, "folder_name"),
-                            id: id.filter(|_| detailed),
+                            id: detailed.then_some(id),
                         },
                     ));
                 }
