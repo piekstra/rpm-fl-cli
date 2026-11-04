@@ -405,7 +405,7 @@ fn transactions_filter_by_kind_here_and_never_ask_the_portal_to() {
     }
 }
 
-/// The match is past the first page, and the walk reaches it.
+/// The matches are past the first page, and the walk reaches them, on each page of the answer.
 #[test]
 fn transactions_walk_the_ledger_and_offer_a_cursor() {
     let mut fixtures = Fixtures::new();
@@ -433,7 +433,6 @@ fn transactions_walk_the_ledger_and_offer_a_cursor() {
         json!({"kind": "disbursement", "limit": 100, "response_format": "detailed"}),
     );
     assert_eq!(first["returned"], 100, "{}", first["hint"]);
-    assert_eq!(first["items"][0]["id"], "1000");
     let cursor = first["next_cursor"].as_str().expect("a next cursor");
 
     let next = ok(
@@ -442,8 +441,123 @@ fn transactions_walk_the_ledger_and_offer_a_cursor() {
         json!({"kind": "disbursement", "limit": 100, "response_format": "detailed", "cursor": cursor}),
     );
     assert_eq!(next["returned"], 1);
-    assert_eq!(next["items"][0]["id"], "2000");
     assert!(next.get("next_cursor").is_none(), "{next}");
+    let mut seen = ids_of(&first);
+    seen.extend(ids_of(&next));
+    seen.sort();
+    let mut all: Vec<String> = (1000..1000 + PAGE_SIZE as u64)
+        .chain([2000])
+        .map(|i| i.to_string())
+        .collect();
+    all.sort();
+    assert_eq!(seen, all);
+}
+
+fn ids_of(page: &Value) -> Vec<String> {
+    page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// Pages `tool` over one set of rows, then over the same rows with a newer one, as a row arriving
+/// between pages. Returns the ids seen, which a cursor holding a count would repeat or skip.
+fn pages_across_an_arrival(
+    tool: &str,
+    path: &'static str,
+    before: Value,
+    after: Value,
+) -> Vec<String> {
+    let args = json!({"limit": 2, "response_format": "detailed"});
+    let earlier = over_answer(path, before);
+    let first = ok(&earlier, tool, args.clone());
+    let mut seen = ids_of(&first);
+    let later = over_answer(path, after);
+    let mut cursor = first["next_cursor"].clone();
+    while cursor.is_string() {
+        let mut next = args.clone();
+        next["cursor"] = cursor;
+        let page = ok(&later, tool, next);
+        seen.extend(ids_of(&page));
+        cursor = page["next_cursor"].clone();
+    }
+    seen.sort();
+    seen
+}
+
+#[test]
+fn a_ledger_entry_posted_between_pages_repeats_nothing_and_skips_nothing() {
+    let row = |id: u64, date: &str| {
+        let mut row = ledger_row(id, "cashIn");
+        row["postedOn"] = json!(date);
+        row
+    };
+    let before = vec![
+        row(4, "2026-03-04"),
+        row(3, "2026-03-03"),
+        row(2, "2026-03-03"),
+        row(1, "2026-03-01"),
+    ];
+    let mut after = vec![row(5, "2026-03-05")];
+    after.extend(before.clone());
+    let seen = pages_across_an_arrival(
+        "rpm_transactions",
+        TRANSACTIONS,
+        Value::Array(before),
+        Value::Array(after),
+    );
+    assert_eq!(seen, ["1", "2", "3", "4"]);
+}
+
+#[test]
+fn a_rent_charge_posted_between_pages_repeats_nothing_and_skips_nothing() {
+    let template = fixture("tenant_charges.json");
+    let template = rows(&template, "rent charges").unwrap()[0].clone();
+    let row = |id: u64, date: &str| {
+        let mut row = template.clone();
+        row["id"] = json!(id.to_string());
+        row["occurredOn"] = json!(date);
+        row
+    };
+    let before = vec![
+        row(4, "2026-03-04"),
+        row(3, "2026-03-03"),
+        row(2, "2026-03-03"),
+        row(1, "2026-03-01"),
+    ];
+    let mut after = vec![row(5, "2026-03-05")];
+    after.extend(before.clone());
+    let seen = pages_across_an_arrival(
+        "rpm_rent",
+        CHARGES,
+        Value::Array(before),
+        Value::Array(after),
+    );
+    assert_eq!(seen, ["1", "2", "3", "4"]);
+}
+
+#[test]
+fn a_document_shared_between_pages_repeats_nothing_and_skips_nothing() {
+    let (key, _) = GROUPS[0];
+    let row =
+        |id: u64, date: &str| json!({"id": id.to_string(), "name": "Sample", "shared_at": date});
+    let before = vec![
+        row(4, "2026-03-04"),
+        row(3, "2026-03-03"),
+        row(2, "2026-03-03"),
+        row(1, "2026-03-01"),
+    ];
+    let mut after = vec![row(5, "2026-03-05")];
+    after.extend(before.clone());
+    let seen = pages_across_an_arrival(
+        "rpm_documents",
+        DOCUMENTS,
+        json!([{ key: before }]),
+        json!([{ key: after }]),
+    );
+    assert_eq!(seen, ["1", "2", "3", "4"]);
 }
 
 /// A cursor from one query does not continue another.

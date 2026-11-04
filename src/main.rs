@@ -323,28 +323,39 @@ fn auth(
             Ok(())
         }
         AuthCmd::Logout(args) => {
-            creds.delete(SESSION_ACCOUNT)?;
+            let session = creds.delete(SESSION_ACCOUNT).map(drop);
             // Drop any half-finished login too, so `logout` really does leave
             // nothing session-shaped behind.
-            creds.delete(PENDING_SESSION_ACCOUNT)?;
+            let pending = creds.delete(PENDING_SESSION_ACCOUNT).map(drop);
             if args.forget {
-                creds.delete(KEYCHAIN_ACCOUNT)?;
-                creds.delete(DEVICE_TOKEN_ACCOUNT)?;
-                // So the next server to start cannot reuse it. A running server read
-                // the token at its start and keeps it in memory, and the variable is
-                // beyond this command: the message says what those take.
-                creds.delete(pk_cli_mcp::HTTP_TOKEN_ACCOUNT)?;
-                store.clear()?;
-                if !cli.common.quiet {
+                let password = creds.delete(KEYCHAIN_ACCOUNT).map(drop);
+                let device = creds.delete(DEVICE_TOKEN_ACCOUNT).map(drop);
+                let token = creds.delete(pk_cli_mcp::HTTP_TOKEN_ACCOUNT);
+                let config = store.clear().map(drop);
+                let quiet = cli.common.quiet;
+                finish_forget(
+                    vec![
+                        ("the session", session),
+                        ("a half-finished login", pending),
+                        ("the password", password),
+                        ("the device token", device),
+                        ("the config", config),
+                    ],
+                    token,
+                    quiet,
+                )?;
+                if !quiet {
                     eprintln!(
-                        "session cleared; password, device token and `mcp --http` token \
-                         removed. A running `rpmfl mcp --http` keeps accepting the old token \
-                         until it stops: stop it, and unset $RPMFL_MCP_TOKEN if it is set. A \
-                         connector still in use needs `rpmfl mcp --new-token`."
+                        "session cleared; password, device token and `mcp --http` token removed. \
+                         A connector still in use needs `rpmfl mcp --new-token`."
                     );
                 }
-            } else if !cli.common.quiet {
-                eprintln!("session cleared (password kept; use --forget to remove it)");
+            } else {
+                session?;
+                pending?;
+                if !cli.common.quiet {
+                    eprintln!("session cleared (password kept; use --forget to remove it)");
+                }
             }
             Ok(())
         }
@@ -556,4 +567,68 @@ fn unknown_key(key: &str) -> CliError {
         "unknown config key `{key}` (known: {})",
         config::KNOWN_KEYS.join(", ")
     ))
+}
+
+/// The end of `auth logout --forget`. Every step has been attempted, and every failure is reported
+/// here: none hides another, or the note that a removed connector token still needs, since a rerun
+/// finds no item.
+fn finish_forget(
+    steps: Vec<(&str, Result<(), CliError>)>,
+    token: Result<bool, CliError>,
+    quiet: bool,
+) -> Result<(), CliError> {
+    if matches!(token, Ok(true)) && !quiet {
+        eprintln!("{}", pk_cli_mcp::stop_note("rpmfl"));
+    }
+    let failed: Vec<String> = steps
+        .into_iter()
+        .chain([("the `mcp --http` token", token.map(drop))])
+        .filter_map(|(what, result)| result.err().map(|e| format!("{what} ({})", e.message())))
+        .collect();
+    if failed.is_empty() {
+        return Ok(());
+    }
+    Err(CliError::Keychain(format!(
+        "could not remove {}; run `rpmfl auth logout --forget` again",
+        failed.join(", ")
+    )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_forget_that_could_not_remove_the_connector_token_says_so() {
+        let denied = Err(CliError::Keychain("denied".into()));
+        let says = finish_forget(vec![("the session", Ok(()))], denied, true)
+            .unwrap_err()
+            .to_string();
+        assert!(says.contains("`mcp --http` token"), "{says}");
+        assert!(says.contains("denied"), "{says}");
+        assert!(says.contains("`rpmfl auth logout --forget`"), "{says}");
+    }
+
+    #[test]
+    fn no_failure_of_a_forget_hides_another() {
+        let says = finish_forget(
+            vec![
+                ("the session", Err(CliError::Keychain("locked".into()))),
+                ("the config", Err(CliError::Other("read-only".into()))),
+            ],
+            Err(CliError::Keychain("denied".into())),
+            true,
+        )
+        .unwrap_err()
+        .to_string();
+        for cause in ["locked", "read-only", "denied"] {
+            assert!(says.contains(cause), "{says}");
+        }
+    }
+
+    #[test]
+    fn a_forget_with_a_token_or_without_one_finishes() {
+        assert!(finish_forget(vec![("the session", Ok(()))], Ok(true), true).is_ok());
+        assert!(finish_forget(vec![("the session", Ok(()))], Ok(false), false).is_ok());
+    }
 }

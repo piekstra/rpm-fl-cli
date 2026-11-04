@@ -31,7 +31,8 @@ use pk_cli_config::ConfigStore;
 use pk_cli_core::transport::require_secure_url;
 use pk_cli_core::{dates, resolve, CliError};
 use pk_cli_mcp::{
-    parse_args, ListArgs, Page, PageRequest, Server, ToolDef, ToolError, ToolOutput, Toolset,
+    parse_args, ListArgs, Order, Page, PageRequest, PositionKey, PositionRequest, Server, ToolDef,
+    ToolError, ToolOutput, Toolset,
 };
 use pk_cli_secrets::{CredentialStore, KeychainRead, Secret, SecretResolver, SecretSpec};
 use schemars::JsonSchema;
@@ -708,7 +709,7 @@ impl<R: Reads> RpmTools<R> {
         let args: TransactionArgs = parse_args(args)?;
         let period = Period::of(&args.since, &args.until)?;
         let named = named_property(args.property.as_deref());
-        let page = PageRequest::new(
+        let page = PositionRequest::new(
             &args.list,
             &Filter {
                 since: &period.since,
@@ -726,9 +727,7 @@ impl<R: Reads> RpmTools<R> {
             None => None,
         };
 
-        let wanted = page.wanted();
-        let mut items: Vec<TransactionItem> = Vec::new();
-        let mut more = false;
+        let mut items: Vec<(PositionKey, TransactionItem)> = Vec::new();
         let bad = || shape_error("ledger");
         for walked in 0..MAX_PAGES {
             let mut query = vec![
@@ -757,21 +756,23 @@ impl<R: Reads> RpmTools<R> {
                         continue;
                     }
                 }
-                items.push(TransactionItem {
-                    date: text(row, "postedOn").ok_or_else(bad)?,
-                    kind: kind.label().into(),
-                    amount: dollars(number(row, "amount").ok_or_else(bad)?),
-                    party: text(row, "partyName"),
-                    property: text(row, "propertyDisplayName"),
-                    description: text(row, "description"),
-                    id: scalar(row, "id").filter(|_| detailed),
-                });
+                let date = text(row, "postedOn").ok_or_else(bad)?;
+                let id = scalar(row, "id");
+                let key = PositionKey::new(date.as_str(), id.as_deref().unwrap_or_default());
+                items.push((
+                    key,
+                    TransactionItem {
+                        date,
+                        kind: kind.label().into(),
+                        amount: dollars(number(row, "amount").ok_or_else(bad)?),
+                        party: text(row, "partyName"),
+                        property: text(row, "propertyDisplayName"),
+                        description: text(row, "description"),
+                        id: id.filter(|_| detailed),
+                    },
+                ));
             }
             if found.len() < PAGE_SIZE {
-                break;
-            }
-            if items.len() >= wanted {
-                more = true;
                 break;
             }
             if walked + 1 == MAX_PAGES {
@@ -785,7 +786,7 @@ impl<R: Reads> RpmTools<R> {
         ToolOutput::new(&TransactionsOut {
             since: period.since,
             until: period.until,
-            page: page.page_with_more(items, more, "since/until, kind or property")?,
+            page: page.page(items, Order::Descending, "since/until, kind or property")?,
         })
     }
 
@@ -794,7 +795,7 @@ impl<R: Reads> RpmTools<R> {
         let period = Period::of(&args.since, &args.until)?;
         period.at_most_a_year()?;
         let named = named_property(args.property.as_deref());
-        let page = PageRequest::new(
+        let page = PositionRequest::new(
             &args.list,
             &Filter {
                 since: &period.since,
@@ -829,20 +830,25 @@ impl<R: Reads> RpmTools<R> {
             }
             let balance = number(row, "balance").ok_or_else(bad)?;
             outstanding += balance;
-            items.push(RentItem {
-                date: text(row, "occurredOn").ok_or_else(bad)?,
-                amount: dollars(number(row, "amount").ok_or_else(bad)?),
-                balance: dollars(balance),
-                property: names.get(property.as_str()).map(|n| n.to_string()),
-                id: scalar(row, "id").filter(|_| detailed),
-            });
+            let date = text(row, "occurredOn").ok_or_else(bad)?;
+            let id = scalar(row, "id");
+            let key = PositionKey::new(date.as_str(), id.as_deref().unwrap_or_default());
+            items.push((
+                key,
+                RentItem {
+                    date,
+                    amount: dollars(number(row, "amount").ok_or_else(bad)?),
+                    balance: dollars(balance),
+                    property: names.get(property.as_str()).map(|n| n.to_string()),
+                    id: id.filter(|_| detailed),
+                },
+            ));
         }
-        items.sort_by(|a, b| b.date.cmp(&a.date));
         ToolOutput::new(&RentOut {
             since: period.since,
             until: period.until,
             outstanding: dollars(outstanding),
-            page: page.page(items, "since/until or property")?,
+            page: page.page(items, Order::Descending, "since/until or property")?,
         })
     }
 
@@ -853,7 +859,7 @@ impl<R: Reads> RpmTools<R> {
             .as_deref()
             .map(str::trim)
             .filter(|q| !q.is_empty());
-        let page = PageRequest::new(&args.list, &query)?;
+        let page = PositionRequest::new(&args.list, &query)?;
         let detailed = args.list.format().is_detailed();
         let needle = query.map(str::to_lowercase);
 
@@ -878,18 +884,27 @@ impl<R: Reads> RpmTools<R> {
                     {
                         continue;
                     }
-                    items.push(DocumentItem {
-                        name,
-                        category: category.into(),
-                        shared: shared_date(row),
-                        folder: text(row, "folder_name"),
-                        id: scalar(row, "id").filter(|_| detailed),
-                    });
+                    let shared = shared_date(row);
+                    let id = scalar(row, "id");
+                    // An id is only unique within its group.
+                    let key = PositionKey::new(
+                        shared.as_deref().unwrap_or_default(),
+                        &format!("{category}:{}", id.as_deref().unwrap_or_default()),
+                    );
+                    items.push((
+                        key,
+                        DocumentItem {
+                            name,
+                            category: category.into(),
+                            shared,
+                            folder: text(row, "folder_name"),
+                            id: id.filter(|_| detailed),
+                        },
+                    ));
                 }
             }
         }
-        items.sort_by(|a, b| b.shared.cmp(&a.shared));
-        ToolOutput::new(&page.page(items, "query")?)
+        ToolOutput::new(&page.page(items, Order::Descending, "query")?)
     }
 }
 
@@ -960,7 +975,7 @@ impl<R: Reads> Toolset for RpmTools<R> {
             ToolDef::read(
                 "rpm_transactions",
                 "Rental ledger",
-                "Lists entries on the user's owner ledger, newest first. Use it for what came \
+                "Lists entries on the user's owner ledger, newest day first. Use it for what came \
                  in, what went out and what was paid to them over a period. Returns since, until \
                  and items with date, kind, amount, party, property and description (detailed \
                  adds id). Narrow with since/until, kind or property.",
@@ -970,7 +985,7 @@ impl<R: Reads> Toolset for RpmTools<R> {
             ToolDef::read(
                 "rpm_rent",
                 "Rent charged to tenants",
-                "Lists rent charged to the user's tenants, newest first, a year at most. Use it \
+                "Lists rent charged to the user's tenants, newest day first, a year at most. Use it \
                  to check whether rent was paid and what is still owed. Returns since, until, \
                  outstanding across the rows the portal returned, and items with date, amount, \
                  balance and property (detailed adds id). Narrow with since/until or property.",
@@ -980,7 +995,7 @@ impl<R: Reads> Toolset for RpmTools<R> {
             ToolDef::read(
                 "rpm_documents",
                 "Documents shared by the manager",
-                "Lists what the manager has shared with the user, newest first: tax forms, \
+                "Lists what the manager has shared with the user, newest day first: tax forms, \
                  management agreements, insurance documents. Use it to see whether a document \
                  has arrived. Items carry name, category, shared and folder (detailed adds id). \
                  It gives no contents or links.",

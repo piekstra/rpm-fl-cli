@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "rpmfl",
   "display_name": "Real Property Management owner portal (rpmfl)",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Read-only access to your own Real Property Management owner portal: portfolio totals, properties, ledger, rent and shared documents, through the open-source rpmfl CLI.",
   "long_description": "Ask Claude about the rentals you own through a Real Property Management office on AppFolio: how a period went, occupancy and lease end dates, what came in and went out, whether rent was paid, and which documents the manager has shared. Five read-only tools, rpm_summary, rpm_properties, rpm_transactions, rpm_rent and rpm_documents; nothing can approve an estimate, sign a form, make a contribution or change anything at the portal. The extension asks for no password: first install the rpmfl CLI, set your portal's URL with `rpmfl config set base_url`, and run `rpmfl auth login` in a terminal. That caches a session in your OS keychain, and the bundled rpmfl reads it from there. When the session expires, run `rpmfl auth login` again. On macOS the first call asks for keychain access; choose Always Allow. What the tools return (totals, property addresses, lease dates, ledger entries with tenant and vendor names, rent charges, document names) goes to Claude as part of your conversation. Unofficial; not affiliated with Real Property Management or AppFolio.",
   "author": {
