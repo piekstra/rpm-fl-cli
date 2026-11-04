@@ -9,7 +9,7 @@ Guidance for AI coding agents (and humans) working in this repo. Tool-agnostic;
 Management franchises hand to rental-property owners. A thin, portal-specific
 layer over the shared [`cli-common`](https://github.com/piekstra/cli-common)
 `pk-cli-*` crates (auth, http, config, secrets, self-update, MCP), pinned to
-**v0.27.0**. This repo owns
+**v0.29.0**. This repo owns
 only the portal client, the commands, their DTOs, and the tools `rpmfl mcp` serves.
 
 There is no official API. Everything targets the undocumented JSON endpoints

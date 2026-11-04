@@ -24,16 +24,16 @@
 //! sign-in. No tool returns one. Approval and form rows are only counted: no
 //! non-empty one has been captured, so what they hold is unknown.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use pk_cli_config::ConfigStore;
 use pk_cli_core::transport::require_secure_url;
 use pk_cli_core::{dates, resolve, CliError};
 use pk_cli_mcp::{
-    parse_args, ListArgs, Order, Page, PageRequest, PositionKey, PositionRequest, Server, ToolDef,
-    ToolError, ToolOutput, Toolset,
+    parse_args, ListArgs, Order, Page, PageRequest, PositionKey, PositionRequest, ReadBudget,
+    RowsSeen, Server, SystemClock, ToolDef, ToolError, ToolOutput, Toolset, READ_BUDGET,
 };
 use pk_cli_secrets::{CredentialStore, KeychainRead, Secret, SecretResolver, SecretSpec};
 use schemars::JsonSchema;
@@ -65,9 +65,6 @@ const DOCUMENTS: &str = "/oportal/api/shared_documents/";
 const PAGE_SIZE: usize = 100;
 /// Most ledger pages one call walks.
 const MAX_PAGES: usize = 50;
-/// How long one call walks the ledger: below `pk_cli_mcp::CALL_LIMIT`, so a slow portal is told to
-/// narrow the period instead of being answered at the limit with nobody told why.
-const WALK_BUDGET: Duration = Duration::from_secs(90);
 
 /// The tools `rpmfl mcp` serves. Nothing here reads the config or the keychain:
 /// a client lists tools before anyone has signed in.
@@ -587,7 +584,7 @@ impl<R: Reads> RpmTools<R> {
         Self {
             server,
             reads,
-            walk_budget: WALK_BUDGET,
+            walk_budget: READ_BUDGET,
         }
     }
 
@@ -743,17 +740,15 @@ impl<R: Reads> RpmTools<R> {
                 "{what}, the most one call reads; narrow since/until"
             ))
         };
-        let started = Instant::now();
+        let clock = SystemClock;
+        let budget = ReadBudget::start(&clock, self.walk_budget);
         // The portal pages by offset, so a row posted during the walk moves a row into the next
         // page as well. That row comes back the same in everything but its attachments, whose links
-        // are signed; two rows that only share an id are two rows.
-        let mut seen: HashSet<String> = HashSet::new();
+        // are signed.
+        let mut seen = RowsSeen::ignoring(&["attachments"]);
         for walked in 0..MAX_PAGES {
-            if walked > 0 && started.elapsed() >= self.walk_budget {
-                return Err(too_many(format!(
-                    "this period took more than {} seconds to read",
-                    self.walk_budget.as_secs()
-                )));
+            if walked > 0 {
+                budget.check(Some("since/until"))?;
             }
             let mut query = vec![
                 ("start_on", period.start_on.clone()),
@@ -783,11 +778,7 @@ impl<R: Reads> RpmTools<R> {
                 }
                 let date = text(row, "postedOn").ok_or_else(bad)?;
                 let id = scalar(row, "id").ok_or_else(bad)?;
-                let mut unsigned = row.clone();
-                if let Some(fields) = unsigned.as_object_mut() {
-                    fields.remove("attachments");
-                }
-                if !seen.insert(unsigned.to_string()) {
+                if !seen.first_time(row) {
                     continue;
                 }
                 let key = PositionKey::new(date.as_str(), &id);
