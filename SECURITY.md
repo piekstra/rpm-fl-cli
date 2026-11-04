@@ -90,6 +90,11 @@ those. Cloudflare is your own account's, and we run no shared service.
 
 ## Handling credentials safely
 
+On Windows, whose Credential Manager holds 2,560 bytes per credential, a longer value is stored
+across several credentials with the suffix `.pk-split-` and read back whole. After a downgrade,
+run `rpmfl auth logout --forget` again from a current build: an older build's logout leaves the
+parts.
+
 Prefer piping from a password manager over typing:
 
 ```console

@@ -3,6 +3,22 @@
 All notable changes to `rpmfl` are documented here. Newest first. The project follows
 [SemVer](https://semver.org/); until 1.0, minors carry the breaking-change signal.
 
+## 0.3.3 — 2026-11-03
+
+- `rpm_transactions`, `rpm_rent` and `rpm_documents` page by position, so a row that arrives between
+  pages repeats nothing and skips nothing. Rows of the same day now run in a fixed order of their
+  own. A cursor from an earlier version still works, as the count of rows it holds.
+- `rpm_transactions` reads the whole period on each page, and asks for a narrower one past 90 seconds
+  or 5,000 entries. A row posted during that read comes back once. One removed during it can still be
+  missed, since the portal pages by offset.
+- A row with no `id` is now an upstream error, since the id decides a row's position.
+- `auth logout --forget` attempts every step and reports every failure, where the first failure used
+  to stop the rest. When it removed a connector token, it says a running `rpmfl mcp --http` keeps
+  accepting that token until it stops, whatever else failed.
+  When the keychain held none, it says so and names `$RPMFL_MCP_TOKEN`.
+- On Windows, a session too long for one credential is split and read back as one.
+- cli-common v0.27.0, up from v0.24.0.
+
 ## 0.3.2 — 2026-11-03
 
 - The portal host must be `https`, or `http` to this machine, before a password or a

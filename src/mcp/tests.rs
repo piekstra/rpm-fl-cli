@@ -405,7 +405,7 @@ fn transactions_filter_by_kind_here_and_never_ask_the_portal_to() {
     }
 }
 
-/// The match is past the first page, and the walk reaches it.
+/// The matches are past the first page, and the walk reaches them, on each page of the answer.
 #[test]
 fn transactions_walk_the_ledger_and_offer_a_cursor() {
     let mut fixtures = Fixtures::new();
@@ -433,7 +433,6 @@ fn transactions_walk_the_ledger_and_offer_a_cursor() {
         json!({"kind": "disbursement", "limit": 100, "response_format": "detailed"}),
     );
     assert_eq!(first["returned"], 100, "{}", first["hint"]);
-    assert_eq!(first["items"][0]["id"], "1000");
     let cursor = first["next_cursor"].as_str().expect("a next cursor");
 
     let next = ok(
@@ -442,8 +441,276 @@ fn transactions_walk_the_ledger_and_offer_a_cursor() {
         json!({"kind": "disbursement", "limit": 100, "response_format": "detailed", "cursor": cursor}),
     );
     assert_eq!(next["returned"], 1);
-    assert_eq!(next["items"][0]["id"], "2000");
     assert!(next.get("next_cursor").is_none(), "{next}");
+    let mut seen = ids_of(&first);
+    seen.extend(ids_of(&next));
+    seen.sort();
+    let mut all: Vec<String> = (1000..1000 + PAGE_SIZE as u64)
+        .chain([2000])
+        .map(|i| i.to_string())
+        .collect();
+    all.sort();
+    assert_eq!(seen, all);
+}
+
+fn ids_of(page: &Value) -> Vec<String> {
+    page["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["id"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// Pages `tool` over one set of rows, then over the same rows with a newer one, as a row arriving
+/// between pages. Returns the ids seen, which a cursor holding a count would repeat or skip.
+fn pages_across_an_arrival(
+    tool: &str,
+    path: &'static str,
+    before: Value,
+    after: Value,
+) -> Vec<String> {
+    let args = json!({"limit": 2, "response_format": "detailed"});
+    let earlier = over_answer(path, before);
+    let first = ok(&earlier, tool, args.clone());
+    let mut seen = ids_of(&first);
+    let later = over_answer(path, after);
+    let mut cursor = first["next_cursor"].clone();
+    while cursor.is_string() {
+        let mut next = args.clone();
+        next["cursor"] = cursor;
+        let page = ok(&later, tool, next);
+        seen.extend(ids_of(&page));
+        cursor = page["next_cursor"].clone();
+    }
+    seen.sort();
+    seen
+}
+
+#[test]
+fn a_ledger_entry_posted_between_pages_repeats_nothing_and_skips_nothing() {
+    let row = |id: u64, date: &str| {
+        let mut row = ledger_row(id, "cashIn");
+        row["postedOn"] = json!(date);
+        row
+    };
+    let before = vec![
+        row(4, "2026-03-04"),
+        row(3, "2026-03-03"),
+        row(2, "2026-03-03"),
+        row(1, "2026-03-01"),
+    ];
+    let mut after = vec![row(5, "2026-03-05")];
+    after.extend(before.clone());
+    let seen = pages_across_an_arrival(
+        "rpm_transactions",
+        TRANSACTIONS,
+        Value::Array(before),
+        Value::Array(after),
+    );
+    assert_eq!(seen, ["1", "2", "3", "4"]);
+}
+
+#[test]
+fn a_rent_charge_posted_between_pages_repeats_nothing_and_skips_nothing() {
+    let template = fixture("tenant_charges.json");
+    let template = rows(&template, "rent charges").unwrap()[0].clone();
+    let row = |id: u64, date: &str| {
+        let mut row = template.clone();
+        row["id"] = json!(id.to_string());
+        row["occurredOn"] = json!(date);
+        row
+    };
+    let before = vec![
+        row(4, "2026-03-04"),
+        row(3, "2026-03-03"),
+        row(2, "2026-03-03"),
+        row(1, "2026-03-01"),
+    ];
+    let mut after = vec![row(5, "2026-03-05")];
+    after.extend(before.clone());
+    let seen = pages_across_an_arrival(
+        "rpm_rent",
+        CHARGES,
+        Value::Array(before),
+        Value::Array(after),
+    );
+    assert_eq!(seen, ["1", "2", "3", "4"]);
+}
+
+#[test]
+fn a_document_shared_between_pages_repeats_nothing_and_skips_nothing() {
+    let (key, _) = GROUPS[0];
+    let row =
+        |id: u64, date: &str| json!({"id": id.to_string(), "name": "Sample", "shared_at": date});
+    let before = vec![
+        row(4, "2026-03-04"),
+        row(3, "2026-03-03"),
+        row(2, "2026-03-03"),
+        row(1, "2026-03-01"),
+    ];
+    let mut after = vec![row(5, "2026-03-05")];
+    after.extend(before.clone());
+    let seen = pages_across_an_arrival(
+        "rpm_documents",
+        DOCUMENTS,
+        json!([{ key: before }]),
+        json!([{ key: after }]),
+    );
+    assert_eq!(seen, ["1", "2", "3", "4"]);
+}
+
+/// The portal pages by offset, so a row posted during a walk moves the last row of one page to the
+/// front of the next.
+#[test]
+fn a_row_posted_during_the_walk_comes_back_once() {
+    let mut fixtures = Fixtures::new();
+    let page =
+        |ids: std::ops::Range<u64>| Value::Array(ids.map(|i| ledger_row(i, "cashIn")).collect());
+    fixtures
+        .answers
+        .insert(TRANSACTIONS, page(0..PAGE_SIZE as u64));
+    fixtures.later_pages = vec![page(PAGE_SIZE as u64 - 1..PAGE_SIZE as u64 + 1)];
+    let tools = tools_over(fixtures);
+    let got = ok(
+        &tools,
+        "rpm_transactions",
+        json!({"limit": 200, "response_format": "detailed"}),
+    );
+    assert_eq!(
+        got["returned"],
+        PAGE_SIZE as u64 + 1,
+        "the overlap is one row"
+    );
+}
+
+/// A row's attachments hold links signed for each answer, so its second read can differ in them.
+#[test]
+fn a_repeat_of_the_walk_is_known_whatever_its_signed_links_say() {
+    let mut fixtures = Fixtures::new();
+    let page = |ids: std::ops::Range<u64>| -> Vec<Value> {
+        ids.map(|i| ledger_row(i, "cashIn")).collect()
+    };
+    let mut first = page(0..PAGE_SIZE as u64);
+    first[PAGE_SIZE - 1]["attachments"] = json!([{"url": "https://example.invalid/a?sig=one"}]);
+    let mut second = page(PAGE_SIZE as u64 - 1..PAGE_SIZE as u64 + 1);
+    second[0]["attachments"] = json!([{"url": "https://example.invalid/a?sig=two"}]);
+    fixtures.answers.insert(TRANSACTIONS, Value::Array(first));
+    fixtures.later_pages = vec![Value::Array(second)];
+    let tools = tools_over(fixtures);
+    let got = ok(&tools, "rpm_transactions", json!({"limit": 200}));
+    assert_eq!(got["returned"], PAGE_SIZE as u64 + 1);
+}
+
+/// Nothing says an id is unique across the ledger's kinds, so only an identical row is a repeat.
+#[test]
+fn two_ledger_rows_that_only_share_an_id_are_two_rows() {
+    let tools = over_answer(
+        TRANSACTIONS,
+        json!([ledger_row(7, "cashIn"), ledger_row(7, "disbursement")]),
+    );
+    let got = ok(&tools, "rpm_transactions", json!({}));
+    assert_eq!(got["returned"], 2, "{got}");
+}
+
+/// A walk that runs out of time asks for a narrower period, and answers in time to say so.
+#[test]
+fn a_walk_past_its_budget_asks_for_a_narrower_period() {
+    let mut fixtures = Fixtures::new();
+    let page = Value::Array(
+        (0..PAGE_SIZE as u64)
+            .map(|i| ledger_row(i, "cashIn"))
+            .collect(),
+    );
+    fixtures.answers.insert(TRANSACTIONS, page);
+    let mut tools = tools_over(fixtures);
+    tools.walk_budget = Duration::ZERO;
+    let text = error(&tools, "rpm_transactions", json!({}));
+    assert!(text.starts_with("usage:"), "{text}");
+    assert!(text.contains("narrow since/until"), "{text}");
+}
+
+/// A cursor issued before this version holds a count, and is read as one.
+fn count_cursor(filter: &impl Serialize) -> String {
+    let list: ListArgs = serde_json::from_value(json!({"limit": 2})).unwrap();
+    let page = PageRequest::new(&list, filter)
+        .unwrap()
+        .page(vec![0, 1, 2], "anything")
+        .unwrap();
+    serde_json::to_value(&page).unwrap()["next_cursor"]
+        .as_str()
+        .expect("a next cursor")
+        .to_string()
+}
+
+#[test]
+fn an_earlier_versions_cursor_still_continues_as_the_count_it_holds() {
+    let window = json!({"since": "2020-01-01", "until": "2020-12-31", "limit": 2,
+                        "response_format": "detailed"});
+    let filter = Filter {
+        since: "2020-01-01",
+        until: "2020-12-31",
+        kind: None,
+        property: None,
+    };
+    let row = |id: u64| {
+        let mut row = ledger_row(id, "cashIn");
+        row["postedOn"] = json!("2020-03-01");
+        row
+    };
+    let tools = over_answer(TRANSACTIONS, json!([row(1), row(2), row(3)]));
+    let mut args = window.clone();
+    args["cursor"] = json!(count_cursor(&filter));
+    assert_eq!(ok(&tools, "rpm_transactions", args)["returned"], 1);
+
+    let template = fixture("tenant_charges.json");
+    let template = rows(&template, "rent charges").unwrap()[0].clone();
+    let charge = |id: u64| {
+        let mut row = template.clone();
+        row["id"] = json!(id.to_string());
+        row["occurredOn"] = json!("2020-03-01");
+        row
+    };
+    let tools = over_answer(CHARGES, json!([charge(1), charge(2), charge(3)]));
+    let mut args = window;
+    args["cursor"] = json!(count_cursor(&filter));
+    assert_eq!(ok(&tools, "rpm_rent", args)["returned"], 1);
+
+    let (key, _) = GROUPS[0];
+    let doc = |id: u64| json!({"id": id.to_string(), "name": "Sample", "shared_at": "2020-03-01"});
+    let tools = over_answer(DOCUMENTS, json!([{ key: [doc(1), doc(2), doc(3)] }]));
+    let args = json!({"limit": 2, "cursor": count_cursor(&None::<&str>)});
+    assert_eq!(ok(&tools, "rpm_documents", args)["returned"], 1);
+}
+
+/// A row with no id could only be told apart by a count, which is what a position replaces.
+#[test]
+fn a_row_with_no_id_is_a_changed_portal_and_not_a_guess() {
+    let mut ledger = ledger_row(1, "cashIn");
+    ledger.as_object_mut().unwrap().remove("id");
+    let text = error(
+        &over_answer(TRANSACTIONS, json!([ledger])),
+        "rpm_transactions",
+        json!({}),
+    );
+    assert!(text.contains("ledger"), "{text}");
+}
+
+/// An id is only unique within its group, so two groups can hold the same one on the same day.
+#[test]
+fn documents_of_two_groups_with_one_id_page_as_two_rows() {
+    let (one, _) = GROUPS[0];
+    let (two, _) = GROUPS[1];
+    let doc = |name: &str| json!({"id": "7", "name": name, "shared_at": "2026-03-01"});
+    let tools = over_answer(DOCUMENTS, json!([{ one: [doc("one")], two: [doc("two")] }]));
+    let first = ok(&tools, "rpm_documents", json!({"limit": 1}));
+    let cursor = first["next_cursor"].as_str().expect("a next cursor");
+    let next = ok(
+        &tools,
+        "rpm_documents",
+        json!({"limit": 1, "cursor": cursor}),
+    );
+    assert_ne!(first["items"][0]["name"], next["items"][0]["name"]);
 }
 
 /// A cursor from one query does not continue another.
