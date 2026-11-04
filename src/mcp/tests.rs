@@ -584,6 +584,24 @@ fn a_row_posted_during_the_walk_comes_back_once() {
     );
 }
 
+/// A row's attachments hold links signed for each answer, so its second read can differ in them.
+#[test]
+fn a_repeat_of_the_walk_is_known_whatever_its_signed_links_say() {
+    let mut fixtures = Fixtures::new();
+    let page = |ids: std::ops::Range<u64>| -> Vec<Value> {
+        ids.map(|i| ledger_row(i, "cashIn")).collect()
+    };
+    let mut first = page(0..PAGE_SIZE as u64);
+    first[PAGE_SIZE - 1]["attachments"] = json!([{"url": "https://example.invalid/a?sig=one"}]);
+    let mut second = page(PAGE_SIZE as u64 - 1..PAGE_SIZE as u64 + 1);
+    second[0]["attachments"] = json!([{"url": "https://example.invalid/a?sig=two"}]);
+    fixtures.answers.insert(TRANSACTIONS, Value::Array(first));
+    fixtures.later_pages = vec![Value::Array(second)];
+    let tools = tools_over(fixtures);
+    let got = ok(&tools, "rpm_transactions", json!({"limit": 200}));
+    assert_eq!(got["returned"], PAGE_SIZE as u64 + 1);
+}
+
 /// Nothing says an id is unique across the ledger's kinds, so only an identical row is a repeat.
 #[test]
 fn two_ledger_rows_that_only_share_an_id_are_two_rows() {

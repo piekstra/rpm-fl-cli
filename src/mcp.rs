@@ -745,7 +745,8 @@ impl<R: Reads> RpmTools<R> {
         };
         let started = Instant::now();
         // The portal pages by offset, so a row posted during the walk moves a row into the next
-        // page as well. That row comes back identical; two rows that only share an id are two rows.
+        // page as well. That row comes back the same in everything but its attachments, whose links
+        // are signed; two rows that only share an id are two rows.
         let mut seen: HashSet<String> = HashSet::new();
         for walked in 0..MAX_PAGES {
             if walked > 0 && started.elapsed() >= self.walk_budget {
@@ -782,7 +783,11 @@ impl<R: Reads> RpmTools<R> {
                 }
                 let date = text(row, "postedOn").ok_or_else(bad)?;
                 let id = scalar(row, "id").ok_or_else(bad)?;
-                if !seen.insert(row.to_string()) {
+                let mut unsigned = row.clone();
+                if let Some(fields) = unsigned.as_object_mut() {
+                    fields.remove("attachments");
+                }
+                if !seen.insert(unsigned.to_string()) {
                     continue;
                 }
                 let key = PositionKey::new(date.as_str(), &id);
