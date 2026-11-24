@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/piekstra/rpm-fl-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/piekstra/rpm-fl-cli/actions/workflows/ci.yml)
 [![release](https://img.shields.io/github/v/release/piekstra/rpm-fl-cli?sort=semver)](https://github.com/piekstra/rpm-fl-cli/releases)
-[![license](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue)](#license)
+[![license](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](#license)
 
 Read your rental portfolio from the command line: properties and leases, the
 owner ledger, rent charges, unpaid bills, 1099s and management agreements —
@@ -264,4 +264,6 @@ addresses, balances, and IDs (see
 
 ## License
 
-MIT OR Apache-2.0.
+Copyright (C) 2026 Caleb Piekstra. Licensed under the GNU Affero General Public
+License, version 3 only (AGPL-3.0-only); see [LICENSE](LICENSE). Releases up to
+and including v0.3.3 were published under MIT OR Apache-2.0.
